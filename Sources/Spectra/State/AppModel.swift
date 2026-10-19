@@ -25,6 +25,8 @@ final class AppModel: ObservableObject {
     private let tokenAccount = "plex.account.token"
 
     func bootstrap() {
+        TrackNotifier.shared.requestAuthIfNeeded()
+        AudioPlayer.shared.onTrackChange = { track in TrackNotifier.shared.notify(track) }
         if let token = Keychain.get(account: tokenAccount) {
             Task { await connect(token: token) }
         } else {

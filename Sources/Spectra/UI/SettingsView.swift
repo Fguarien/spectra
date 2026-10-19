@@ -4,6 +4,7 @@ import AppKit
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var theme = ThemeManager.shared
+    @AppStorage("notifyOnTrackChange") private var notifyOnTrackChange = true
 
     var body: some View {
         Form {
@@ -22,6 +23,12 @@ struct SettingsView: View {
                     ForEach(ThemeManager.TextSize.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented)
+            }
+
+            Section("Notifications") {
+                Toggle("Notify on track change", isOn: $notifyOnTrackChange)
+                Text("Shows a notification with the track, artist and album when the song changes while Spectra is in the background.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Prism Import") {

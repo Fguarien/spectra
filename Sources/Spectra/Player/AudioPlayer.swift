@@ -51,6 +51,9 @@ final class AudioPlayer: ObservableObject {
     /// Called with (ratingKey, state, timeMs, durationMs) for Plex scrobbling.
     var onTimeline: ((String, String, Int, Int) -> Void)?
 
+    /// Called when playback moves to a new track (drives user notifications).
+    var onTrackChange: ((PlayableTrack) -> Void)?
+
     private init() {
         player.actionAtItemEnd = .advance
         setupRemoteCommands()
@@ -213,6 +216,7 @@ final class AudioPlayer: ObservableObject {
         isPlaying = true
         emitTimeline(state: "playing")
         updateNowPlayingInfo()
+        if let c = current { onTrackChange?(c) }
     }
 
     /// Rebuild only the not-yet-played tail after the current item (used when
@@ -237,6 +241,7 @@ final class AudioPlayer: ObservableObject {
             currentIndex = order[orderPos]
             emitTimeline(state: "playing")
             updateNowPlayingInfo()
+            if let c = current { onTrackChange?(c) }
         } else if repeatMode == .all {
             orderPos = 0; rebuildAndPlay()
         } else {
