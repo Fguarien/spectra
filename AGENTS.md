@@ -15,13 +15,22 @@ open Spectra.app
 No `.xcodeproj`: the app is a SwiftPM executable target, bundled by `make-app.sh`.
 Dependency: GRDB 7.11.0 (pinned).
 
+`./make-app.sh release --install` also copies the bundle into `/Applications`.
+The app icon (a prism splitting white light) is generated reproducibly by
+`Tools/make-icon.swift` on first build — no binary asset is committed.
+
 ## Layout
 
-- `Sources/Spectra/Plex/` — plex.tv PIN auth, server discovery, library API, stream URLs.
-- `Sources/Spectra/Player/` — AVPlayer queue engine + system Now-Playing / remote commands.
-- `Sources/Spectra/Data/` — GRDB store, records, and the Prism `Items.db` importer.
-- `Sources/Spectra/State/` — `AppModel` orchestrator.
-- `Sources/Spectra/UI/` — SwiftUI views (login, three-column library, now-playing bar).
+- `Sources/Spectra/Plex/` — plex.tv PIN auth, server discovery, library API,
+  search, playlists, ratings, stream + universal-transcode URLs.
+- `Sources/Spectra/Player/` — AVQueuePlayer gapless engine (shuffle/repeat/
+  reorder), system Now-Playing / remote commands, and the offline download manager.
+- `Sources/Spectra/Data/` — GRDB store, records, and the schema-adaptive Prism
+  `Items.db` importer (tracks, plays, tags, similar artists, playlists).
+- `Sources/Spectra/State/` — `AppModel` orchestrator + `ThemeManager`.
+- `Sources/Spectra/UI/` — SwiftUI views (sidebar, library, playlists, search,
+  downloads, settings, queue, now-playing bar).
+- `Tools/make-icon.swift` — CoreGraphics app-icon generator.
 
 ## Data notes (reverse-engineered from a Prism export)
 
@@ -30,11 +39,16 @@ Dependency: GRDB 7.11.0 (pinned).
 - The Plex account token is a secret: stored only in the macOS Keychain, never
   on disk in cleartext, never logged.
 
-## Roadmap to a complete clone
+## Status — complete clone
 
-Done (phase 1): Plex link auth, server discovery, artist/album/track browse,
-streaming playback, queue + transport, system Now-Playing, Plex scrobble,
-Prism import (tracks + play history).
+Delivered: Plex link auth, server discovery, artist/album/track browse,
+streaming playback, system Now-Playing + remote commands, Plex scrobble,
+Prism import (tracks, plays, tags, similar artists, playlists); star ratings
+(local + Plex `/:/rate`), playlists (read/play/delete/add + recreate imported
+Prism ones), server-side search, similar artists, offline downloads + local
+playback, Auto/Light/Dark themes with accent + text size, universal-transcode
+fallback for `ape` and other non-AVFoundation codecs, gapless queue with
+shuffle / repeat / reorder / remove / jump, app icon, `/Applications` install.
 
-Next: star ratings sync, playlists (read+write), full-text search, similar
-artists, offline downloads, theming, gapless/transcode fallback for `ape`.
+Possible follow-ups (not required for parity): smart playlists, lyrics,
+sonic-analysis mixes, multi-server switching.
