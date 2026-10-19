@@ -5,7 +5,7 @@ import Foundation
 /// "device" shown in Plex account settings), so it lives in UserDefaults.
 enum PlexIdentity {
     static let product = "Spectra"
-    static let version = "0.1"
+    static let version = "1.0"
     static let platform = "macOS"
 
     static var clientIdentifier: String {

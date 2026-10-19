@@ -32,6 +32,21 @@ struct MediaContainerResponse<T: Decodable>: Decodable {
     var items: [T] { MediaContainer.Metadata ?? MediaContainer.Directory ?? [] }
 }
 
+/// Envelope used by /hubs/search and /library/metadata/{id}/related: a list of
+/// Hubs, each carrying its own Metadata/Directory rows.
+struct HubContainerResponse: Decodable {
+    let MediaContainer: Container
+    struct Container: Decodable { let Hub: [Hub]? }
+    struct Hub: Decodable {
+        let title: String?
+        let type: String?        // "track", "album", "artist", "playlist"…
+        let Metadata: [PlexMetadata]?
+        let Directory: [PlexMetadata]?
+        var items: [PlexMetadata] { Metadata ?? Directory ?? [] }
+    }
+    var hubs: [Hub] { MediaContainer.Hub ?? [] }
+}
+
 struct PlexSection: Decodable {
     let key: String
     let type: String
@@ -39,23 +54,34 @@ struct PlexSection: Decodable {
 }
 
 /// One row of a /library/... listing. Fields are optional because the same
-/// envelope is reused for artists (type 8), albums (9) and tracks (10).
+/// envelope is reused for artists (type 8), albums (9), tracks (10) and
+/// playlists.
 struct PlexMetadata: Decodable {
     let ratingKey: String
+    let key: String?
     let title: String
     let type: String?
     let thumb: String?
+    let art: String?
     let parentTitle: String?
     let grandparentTitle: String?
+    let parentRatingKey: String?
+    let grandparentRatingKey: String?
     let index: Int?
     let duration: Int?          // milliseconds
     let userRating: Double?
     let year: Int?
+    let leafCount: Int?         // playlist/album track count
     let Media: [PlexMedia]?
 
     /// First playable part key, e.g. "/library/parts/17224/.../file.flac".
     var firstPartKey: String? { Media?.first?.Part.first?.key }
-    var codec: String? { Media?.first?.Part.first?.container ?? Media?.first?.audioCodec }
+    /// Container (file) codec, falling back to the audio stream codec.
+    var codec: String? {
+        (Media?.first?.Part.first?.container ?? Media?.first?.audioCodec)?.lowercased()
+    }
+    /// A Plex `uri` fragment for playlist operations: server://machine/.../ratingKey.
+    var libraryKey: String { "/library/metadata/\(ratingKey)" }
 }
 
 extension PlexMetadata: Hashable, Identifiable {
@@ -72,4 +98,19 @@ struct PlexMedia: Decodable {
 struct PlexPart: Decodable {
     let key: String
     let container: String?
+}
+
+// MARK: - codec capability
+
+/// Codecs AVFoundation decodes natively on macOS. Anything else (notably
+/// Monkey's Audio `ape`, `wma`, `opus` in some containers) must be streamed
+/// through Plex's universal transcoder.
+enum AudioCapability {
+    static let native: Set<String> = [
+        "flac", "mp3", "aac", "m4a", "alac", "aiff", "aif", "wav", "mp4", "caf",
+    ]
+    static func canPlayNatively(_ codec: String?) -> Bool {
+        guard let codec = codec?.lowercased() else { return true } // optimistic
+        return native.contains(codec)
+    }
 }

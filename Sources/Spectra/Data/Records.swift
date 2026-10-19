@@ -16,6 +16,7 @@ struct TrackRecord: Codable, FetchableRecord, PersistableRecord, Identifiable {
     var userRating: Int?           // 0...5
     var playCount: Int
     var lastPlayed: Date?
+    var localPath: String?         // non-nil once downloaded for offline playback
 
     static let databaseTableName = "track"
 }
@@ -29,4 +30,34 @@ struct PlayRecord: Codable, FetchableRecord, PersistableRecord {
     var playedAt: Date?
 
     static let databaseTableName = "play"
+}
+
+/// Track ↔ tag link imported from Prism (`tag` + `itemTags`), denormalised by
+/// name so it survives even when a track has no live Plex ratingKey.
+struct TrackTagRecord: Codable, FetchableRecord, PersistableRecord {
+    var id: Int64?
+    var ratingKey: String?
+    var tagName: String
+
+    static let databaseTableName = "trackTag"
+}
+
+/// A Prism playlist and its ordered membership (imported for offline parity;
+/// live Plex playlists are fetched separately).
+struct PrismPlaylistRecord: Codable, FetchableRecord, PersistableRecord {
+    var id: Int64?
+    var name: String
+    var ratingKey: String?         // the track's Plex ratingKey
+    var position: Int
+
+    static let databaseTableName = "prismPlaylist"
+}
+
+/// Imported "similar artists" edges (Prism `similarArtists`).
+struct SimilarArtistRecord: Codable, FetchableRecord, PersistableRecord {
+    var id: Int64?
+    var artistName: String
+    var similarName: String
+
+    static let databaseTableName = "similarArtist"
 }

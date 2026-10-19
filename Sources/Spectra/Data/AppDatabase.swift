@@ -45,8 +45,33 @@ final class AppDatabase {
                 t.column("playedAt", .datetime)
             }
         }
+        m.registerMigration("v2") { db in
+            try db.alter(table: "track") { t in
+                t.add(column: "localPath", .text)
+            }
+            try db.create(table: "trackTag") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("ratingKey", .text)
+                t.column("tagName", .text).notNull()
+            }
+            try db.create(table: "prismPlaylist") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text).notNull()
+                t.column("ratingKey", .text)
+                t.column("position", .integer).notNull().defaults(to: 0)
+            }
+            try db.create(table: "similarArtist") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("artistName", .text).notNull()
+                t.column("similarName", .text).notNull()
+            }
+            try db.create(indexOn: "trackTag", columns: ["tagName"])
+            try db.create(indexOn: "track", columns: ["ratingKey"])
+        }
         return m
     }
+
+    // MARK: reads used by the UI
 
     func trackCount() -> Int {
         (try? dbQueue.read { try TrackRecord.fetchCount($0) }) ?? 0
@@ -59,6 +84,72 @@ final class AppDatabase {
                 .order(sql: "userRating DESC, playCount DESC")
                 .limit(limit)
                 .fetchAll(db)
+        }) ?? []
+    }
+
+    func rating(forRatingKey key: String) -> Int? {
+        try? dbQueue.read { db in
+            try Int.fetchOne(db, sql: "SELECT userRating FROM track WHERE ratingKey = ? LIMIT 1", arguments: [key])
+        } ?? nil
+    }
+
+    /// Persist a rating locally (keyed by Plex ratingKey), upserting a stub row
+    /// if the track was never imported.
+    func setRating(_ stars: Int, ratingKey: String, title: String?, artist: String?) {
+        try? dbQueue.write { db in
+            let n = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM track WHERE ratingKey = ?", arguments: [ratingKey]) ?? 0
+            if n > 0 {
+                try db.execute(sql: "UPDATE track SET userRating = ? WHERE ratingKey = ?", arguments: [stars, ratingKey])
+            } else {
+                try db.execute(
+                    sql: "INSERT INTO track (ratingKey, trackTitle, artistName, trackNumber, durationMs, playCount, userRating) VALUES (?,?,?,0,0,0,?)",
+                    arguments: [ratingKey, title, artist, stars])
+            }
+        }
+    }
+
+    func localPath(forRatingKey key: String) -> String? {
+        let p = try? dbQueue.read { db in
+            try String.fetchOne(db, sql: "SELECT localPath FROM track WHERE ratingKey = ? AND localPath IS NOT NULL LIMIT 1", arguments: [key])
+        }
+        return (p ?? nil).flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil }
+    }
+
+    func setLocalPath(_ path: String?, ratingKey: String, title: String?, artist: String?, durationMs: Int, codec: String?) {
+        try? dbQueue.write { db in
+            let n = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM track WHERE ratingKey = ?", arguments: [ratingKey]) ?? 0
+            if n > 0 {
+                try db.execute(sql: "UPDATE track SET localPath = ? WHERE ratingKey = ?", arguments: [path, ratingKey])
+            } else {
+                try db.execute(
+                    sql: "INSERT INTO track (ratingKey, trackTitle, artistName, trackNumber, durationMs, codec, playCount, localPath) VALUES (?,?,?,0,?,?,0,?)",
+                    arguments: [ratingKey, title, artist, durationMs, codec, path])
+            }
+        }
+    }
+
+    func downloadedKeys() -> Set<String> {
+        let keys = (try? dbQueue.read { db in
+            try String.fetchAll(db, sql: "SELECT ratingKey FROM track WHERE localPath IS NOT NULL AND ratingKey IS NOT NULL")
+        }) ?? []
+        return Set(keys)
+    }
+
+    func downloadedTracks() -> [TrackRecord] {
+        (try? dbQueue.read { db in
+            try TrackRecord.filter(sql: "localPath IS NOT NULL").order(sql: "artistName, albumTitle, trackNumber").fetchAll(db)
+        }) ?? []
+    }
+
+    func tags() -> [String] {
+        (try? dbQueue.read { db in
+            try String.fetchAll(db, sql: "SELECT DISTINCT tagName FROM trackTag ORDER BY tagName")
+        }) ?? []
+    }
+
+    func prismPlaylistNames() -> [String] {
+        (try? dbQueue.read { db in
+            try String.fetchAll(db, sql: "SELECT DISTINCT name FROM prismPlaylist ORDER BY name")
         }) ?? []
     }
 }

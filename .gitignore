@@ -7,3 +7,7 @@ Spectra.app/
 .env*
 *.sqlite
 Items.db
+
+# build-time icon artifacts
+Resources/AppIcon.icns
+*.iconset/

@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Three-column music browser: artists → albums → tracks, with a toolbar
-/// that exposes server name, sign-out and the Prism importer.
+/// Three-column music browser: artists → albums (+ similar artists) → tracks.
 struct LibraryView: View {
     @EnvironmentObject var model: AppModel
     @State private var selectedArtist: PlexMetadata?
@@ -13,11 +12,10 @@ struct LibraryView: View {
         NavigationSplitView {
             artistColumn
         } content: {
-            albumColumn
+            middleColumn
         } detail: {
             TrackListView(album: selectedAlbum, tracks: tracks)
         }
-        .toolbar { toolbarContent }
         .onChange(of: selectedArtist) { _, artist in loadAlbums(artist) }
         .onChange(of: selectedAlbum) { _, album in loadTracks(album) }
     }
@@ -29,46 +27,35 @@ struct LibraryView: View {
         .navigationTitle("Artists")
     }
 
-    private var albumColumn: some View {
-        List(albums, id: \.ratingKey, selection: $selectedAlbum) { album in
-            AlbumRow(album: album, imageURL: model.imageURL(album.thumb, size: 80))
-                .tag(Optional(album))
+    private var middleColumn: some View {
+        List(selection: $selectedAlbum) {
+            Section("Albums") {
+                ForEach(albums) { album in
+                    AlbumRow(album: album, imageURL: model.imageURL(album.thumb, size: 80))
+                        .tag(Optional(album))
+                }
+            }
+            if !model.similarArtists.isEmpty {
+                Section("Similar Artists") {
+                    ForEach(model.similarArtists) { a in
+                        Button(a.title) { selectedArtist = a }
+                            .buttonStyle(.plain)
+                    }
+                }
+            }
         }
         .navigationTitle(selectedArtist?.title ?? "Albums")
     }
 
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            Label(model.serverName, systemImage: "server.rack")
-        }
-        ToolbarItemGroup {
-            if let msg = model.importMessage {
-                Text(msg).font(.caption).foregroundStyle(.secondary)
-            }
-            Button("Import from Prism…") { pickPrismDB() }
-            Button("Sign out") { model.signOut() }
-        }
-    }
-
     private func loadAlbums(_ artist: PlexMetadata?) {
-        guard let artist else { albums = []; return }
+        guard let artist else { albums = []; model.similarArtists = []; return }
+        model.loadSimilar(for: artist)
         Task { albums = await model.albums(of: artist) }
     }
 
     private func loadTracks(_ album: PlexMetadata?) {
         guard let album else { tracks = []; return }
         Task { tracks = await model.tracks(of: album) }
-    }
-
-    private func pickPrismDB() {
-        let panel = NSOpenPanel()
-        panel.message = "Choose the Prism Items.db exported from the .imazingapp"
-        panel.allowsOtherFileTypes = true
-        panel.canChooseFiles = true
-        if panel.runModal() == .OK, let url = panel.url {
-            model.runImport(prismDBPath: url.path)
-        }
     }
 }
 
@@ -96,10 +83,20 @@ struct TrackListView: View {
 
     var body: some View {
         if let album {
-            List(Array(tracks.enumerated()), id: \.element.ratingKey) { pair in
-                TrackRow(index: pair.offset, track: pair.element)
-                    .contentShape(Rectangle())
-                    .onTapGesture { playFrom(index: pair.offset) }
+            VStack(spacing: 0) {
+                header(album)
+                List {
+                    ForEach(Array(tracks.enumerated()), id: \.element.ratingKey) { pair in
+                        TrackRow(index: pair.offset, track: pair.element,
+                                 albumTitle: album.title, artist: album.parentTitle ?? "")
+                            .contentShape(Rectangle())
+                            .onTapGesture { playFrom(index: pair.offset, album: album) }
+                            .contextMenu {
+                                TrackMenu(track: pair.element, albumTitle: album.title,
+                                          artist: album.parentTitle ?? "")
+                            }
+                    }
+                }
             }
             .navigationTitle(album.title)
         } else {
@@ -107,47 +104,47 @@ struct TrackListView: View {
         }
     }
 
-    private func playFrom(index: Int) {
-        let artist = album?.parentTitle ?? ""
-        let albumTitle = album?.title ?? ""
-        let playables = tracks.compactMap { model.playable($0, albumTitle: albumTitle, artist: artist) }
-        guard !playables.isEmpty else { return }
-        AudioPlayer.shared.play(tracks: playables, startAt: min(index, playables.count - 1))
+    private func header(_ album: PlexMetadata) -> some View {
+        HStack(spacing: 14) {
+            ArtworkView(url: model.imageURL(album.thumb, size: 160), side: 88)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(album.title).font(.title3).fontWeight(.semibold)
+                Text(album.parentTitle ?? "").foregroundStyle(.secondary)
+                Button {
+                    playFrom(index: 0, album: album)
+                } label: { Label("Play", systemImage: "play.fill") }
+            }
+            Spacer()
+        }
+        .padding(16)
+    }
+
+    private func playFrom(index: Int, album: PlexMetadata) {
+        model.play(tracks, startAt: index, albumTitle: album.title, artist: album.parentTitle ?? "")
     }
 }
 
 struct TrackRow: View {
+    @EnvironmentObject var model: AppModel
     let index: Int
     let track: PlexMetadata
+    let albumTitle: String
+    let artist: String
 
     var body: some View {
-        HStack {
+        HStack(spacing: 10) {
             Text(track.index.map(String.init) ?? "\(index + 1)")
-                .frame(width: 28, alignment: .trailing).foregroundStyle(.secondary)
-            Text(track.title)
+                .frame(width: 26, alignment: .trailing).foregroundStyle(.secondary)
+            Text(track.title).lineLimit(1)
             Spacer()
+            OfflineBadge(ratingKey: track.ratingKey)
+            StarRatingView(rating: currentRating, compact: true) { model.rate(track, stars: $0) }
             Text(durationText(track.duration)).foregroundStyle(.secondary).font(.callout)
+                .frame(width: 44, alignment: .trailing)
         }
     }
 
-    private func durationText(_ ms: Int?) -> String {
-        guard let ms else { return "" }
-        let s = ms / 1000
-        return String(format: "%d:%02d", s / 60, s % 60)
-    }
-}
-
-struct ArtworkView: View {
-    let url: URL?
-    let side: CGFloat
-
-    var body: some View {
-        AsyncImage(url: url) { image in
-            image.resizable().aspectRatio(contentMode: .fill)
-        } placeholder: {
-            Rectangle().fill(.quaternary).overlay(Image(systemName: "music.note"))
-        }
-        .frame(width: side, height: side)
-        .clipShape(RoundedRectangle(cornerRadius: 4))
+    private var currentRating: Int {
+        model.rating(track.ratingKey) ?? track.userRating.map { Int($0 / 2) } ?? 0
     }
 }
