@@ -139,11 +139,39 @@ enum Importer {
     }
 
     /// similarArtists → similarArtist(artistName, similarName). Handles both a
-    /// text-pair schema and an id-pair schema that references artist names.
+    /// text-pair schema and Prism's id-pair schema.
+    ///
+    /// In Prism's schema the two columns are `artistId` / `similarArtistId`,
+    /// referencing an artist by its `albumArtistId` in `item`. The "similar"
+    /// side is frequently an artist *outside* the user's library (Plex's own
+    /// graph) whose name Prism fetched live and never stored here — those edges
+    /// have no resolvable name and are skipped. Only pairs whose BOTH ends
+    /// resolve to a library artist name are kept; raw numeric ids are NEVER
+    /// inserted as names (that would make the name-matched fallback useless).
     private static func importSimilar(_ sdb: Database, _ ddb: Database, _ s: inout Summary) throws {
         guard try tableExists(sdb, "similarArtists") else { return }
         let cols = try columns(sdb, "similarArtists")
-        // Prefer two text columns naming the artists directly.
+        let lower = cols.map { $0.lowercased() }
+
+        if lower.contains("artistid") && lower.contains("similarartistid") {
+            let sql = """
+                SELECT DISTINCT a.albumArtistName AS x, b.albumArtistName AS y
+                FROM similarArtists sa
+                JOIN item a ON a.albumArtistId = sa.artistId
+                JOIN item b ON b.albumArtistId = sa.similarArtistId
+                WHERE a.albumArtistName IS NOT NULL AND b.albumArtistName IS NOT NULL
+                """
+            let rows = try Row.fetchCursor(sdb, sql: sql)
+            while let r = try rows.next() {
+                guard let x = r["x"] as String?, let y = r["y"] as String?, !x.isEmpty, !y.isEmpty else { continue }
+                try ddb.execute(sql: "INSERT INTO similarArtist (artistName, similarName) VALUES (?,?)",
+                                arguments: [x, y])
+                s.similar += 1
+            }
+            return
+        }
+
+        // Fallback: a text-pair schema naming the artists directly.
         let names = cols.filter { $0.lowercased().contains("name") || $0.lowercased().contains("artist") }
         guard names.count >= 2 else { return }
         let a = names[0], b = names[1]
@@ -162,14 +190,18 @@ enum Importer {
         let plCols = try columns(sdb, "playlist")
         guard let plName = firstMatch(plCols, contains: ["name", "title"]),
               let plId = firstMatch(plCols, contains: ["id"]) else { return }
-        // Find a membership table whose columns reference both a playlist and an item/track.
+        // Find a membership table whose columns reference both a playlist and an
+        // item/track. Prefer an explicit `itemPlaylists` membership table when
+        // present (other tables like playlistSync match "playlist" but hold no
+        // track rows).
         let tables = try String.fetchAll(sdb, sql: "SELECT name FROM sqlite_master WHERE type='table'")
+            .sorted { ($0 == "itemPlaylists" ? 0 : 1) < ($1 == "itemPlaylists" ? 0 : 1) }
         var member: (table: String, plRef: String, itemRef: String, order: String?)?
         for t in tables where t != "playlist" {
             let c = try columns(sdb, t)
             if let p = firstMatch(c, contains: ["playlist"]),
                let it = firstMatch(c, contains: ["item", "track"]) {
-                member = (t, p, it, firstMatch(c, contains: ["position", "order", "index", "rank"]))
+                member = (t, p, it, firstMatch(c, contains: ["position", "order", "index", "rank", "sort"]))
                 break
             }
         }
