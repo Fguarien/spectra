@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+Spectra.app/
+*.xcodeproj
+.DS_Store
+*.bak*
+.env*
+*.sqlite
+Items.db
