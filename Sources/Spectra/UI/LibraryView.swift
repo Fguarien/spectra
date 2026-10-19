@@ -1,6 +1,8 @@
 import SwiftUI
 
 /// Three-column music browser: artists → albums (+ similar artists) → tracks.
+/// Selection is driven by explicit taps (not `List(selection:)`, which is
+/// unreliable inside the app's custom pane layout), with manual row highlight.
 struct LibraryView: View {
     @EnvironmentObject var model: AppModel
     @State private var selectedArtist: PlexMetadata?
@@ -21,25 +23,37 @@ struct LibraryView: View {
     }
 
     private var artistColumn: some View {
-        List(model.artists, id: \.ratingKey, selection: $selectedArtist) { artist in
-            Text(artist.title).tag(Optional(artist))
+        List {
+            ForEach(model.artists) { artist in
+                Text(artist.title)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture { selectedArtist = artist }
+                    .listRowBackground(selectedArtist == artist ? Color.accentColor.opacity(0.22) : Color.clear)
+            }
         }
         .navigationTitle("Artists")
     }
 
     private var middleColumn: some View {
-        List(selection: $selectedAlbum) {
+        List {
             Section("Albums") {
                 ForEach(albums) { album in
                     AlbumRow(album: album, imageURL: model.imageURL(album.thumb, size: 80))
-                        .tag(Optional(album))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture { selectedAlbum = album }
+                        .listRowBackground(selectedAlbum == album ? Color.accentColor.opacity(0.22) : Color.clear)
                 }
+                if albums.isEmpty { Text(selectedArtist == nil ? "Select an artist" : "No albums").foregroundStyle(.secondary) }
             }
             if !model.similarArtists.isEmpty {
                 Section("Similar Artists") {
                     ForEach(model.similarArtists) { a in
-                        Button(a.title) { selectedArtist = a }
-                            .buttonStyle(.plain)
+                        Text(a.title)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .onTapGesture { selectedArtist = a }
                     }
                 }
             }
@@ -48,6 +62,7 @@ struct LibraryView: View {
     }
 
     private func loadAlbums(_ artist: PlexMetadata?) {
+        selectedAlbum = nil; tracks = []
         guard let artist else { albums = []; model.similarArtists = []; return }
         model.loadSimilar(for: artist)
         Task { albums = await model.albums(of: artist) }

@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Live Plex playlists (browse, play, delete) plus playlists imported from
-/// Prism that can be recreated on the server.
+/// Prism that can be recreated on the server. Selection is tap-driven with a
+/// manual highlight (not `List(selection:)`).
 struct PlaylistsView: View {
     @EnvironmentObject var model: AppModel
     @State private var selected: PlexMetadata?
@@ -9,7 +10,7 @@ struct PlaylistsView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $selected) {
+            List {
                 Section("Plex Playlists") {
                     ForEach(model.playlists) { pl in
                         Label {
@@ -18,7 +19,10 @@ struct PlaylistsView: View {
                                 if let n = pl.leafCount { Text("\(n) tracks").font(.caption).foregroundStyle(.secondary) }
                             }
                         } icon: { Image(systemName: "music.note.list") }
-                        .tag(Optional(pl))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture { selected = pl }
+                        .listRowBackground(selected == pl ? Color.accentColor.opacity(0.22) : Color.clear)
                     }
                     if model.playlists.isEmpty { Text("None").foregroundStyle(.secondary) }
                 }
@@ -50,6 +54,7 @@ struct PlaylistsView: View {
                     Text(pl.title).font(.title2).fontWeight(.semibold)
                     Spacer()
                     Button { model.play(tracks, startAt: 0) } label: { Label("Play", systemImage: "play.fill") }
+                        .disabled(tracks.isEmpty)
                     Button(role: .destructive) {
                         model.deletePlaylist(pl); selected = nil; tracks = []
                     } label: { Label("Delete", systemImage: "trash") }
