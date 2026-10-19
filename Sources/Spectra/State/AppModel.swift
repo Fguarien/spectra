@@ -2,8 +2,9 @@ import Foundation
 import SwiftUI
 import AppKit
 
-/// Top-level app state: authentication, the Plex client, browsing, search,
-/// playlists, ratings and offline downloads. Drives which root screen is shown.
+/// Top-level app state: accounts, the active music provider, browsing, search,
+/// playlists, ratings and offline downloads. Phase 2: the Plex client is one
+/// provider behind `MusicProvider`, and several accounts can be configured.
 @MainActor
 final class AppModel: ObservableObject {
     enum Phase { case signedOut, linking, loading, ready, error(String) }
@@ -13,29 +14,41 @@ final class AppModel: ObservableObject {
     @Published var linkCode: String?          // shown while the user approves in-browser
     @Published var serverName = ""
     @Published var pane: Pane = .library
-    @Published var sections: [PlexSection] = []
     @Published var artists: [PlexMetadata] = []
     @Published var playlists: [PlexMetadata] = []
     @Published var searchHits: [HubContainerResponse.Hub] = []
     @Published var similarArtists: [PlexMetadata] = []
     @Published var importMessage: String?
 
-    private(set) var client: PlexClient?
+    // Multi-account (A2).
+    @Published var accounts: [Account] = []
+    @Published var activeAccountID: String?
+
+    private(set) var provider: (any MusicProvider)?
     private let auth = PlexAuth()
-    private let tokenAccount = "plex.account.token"
+    private let legacyTokenAccount = "plex.account.token"   // pre-multi-account key
 
     func bootstrap() {
         TrackNotifier.shared.requestAuthIfNeeded()
         AudioPlayer.shared.onTrackChange = { track in TrackNotifier.shared.notify(track) }
-        if let token = Keychain.get(account: tokenAccount) {
-            Task { await connect(token: token) }
+
+        AccountStore.shared.migrateLegacyIfNeeded(legacyAccount: legacyTokenAccount)
+        refreshAccounts()
+        if let active = AccountStore.shared.activeAccount {
+            connect(account: active)
         } else {
             phase = .signedOut
         }
     }
 
-    // MARK: sign-in
+    private func refreshAccounts() {
+        accounts = AccountStore.shared.accounts
+        activeAccountID = AccountStore.shared.activeAccount?.id
+    }
 
+    // MARK: sign-in / accounts (A2)
+
+    /// Link a new Plex account via the plex.tv PIN flow and make it active.
     func startLink() {
         phase = .linking
         Task {
@@ -44,72 +57,86 @@ final class AppModel: ObservableObject {
                 linkCode = pin.code
                 NSWorkspace.shared.open(auth.authURL(code: pin.code))
                 let token = try await auth.pollForToken(pin: pin)
-                Keychain.set(token, account: tokenAccount)
-                await connect(token: token)
+                let account = Account(id: UUID().uuidString, kind: .plex, name: "Plex")
+                AccountStore.shared.add(account, token: token)
+                AccountStore.shared.activeID = account.id
+                refreshAccounts()
+                connect(account: account)
             } catch {
                 phase = .error("Linking failed: \(error.localizedDescription)")
             }
         }
     }
 
+    func switchAccount(_ id: String) {
+        guard let account = accounts.first(where: { $0.id == id }) else { return }
+        AccountStore.shared.activeID = id
+        refreshAccounts()
+        connect(account: account)
+    }
+
+    /// Remove the active account; switch to another if one remains, else sign out.
     func signOut() {
-        Keychain.delete(account: tokenAccount)
-        client = nil
-        sections = []; artists = []; playlists = []; searchHits = []; similarArtists = []
-        serverName = ""
-        phase = .signedOut
+        if let id = activeAccountID { AccountStore.shared.remove(id) }
+        AudioPlayer.shared.onTimeline = nil
+        provider = nil
+        artists = []; playlists = []; searchHits = []; similarArtists = []; serverName = ""
+        refreshAccounts()
+        if let next = AccountStore.shared.activeAccount {
+            connect(account: next)
+        } else {
+            phase = .signedOut
+        }
     }
 
     // MARK: connect + load
 
-    private func connect(token: String) async {
+    private func connect(account: Account) {
+        guard let token = AccountStore.shared.token(for: account.id) else {
+            phase = .error("No stored credentials for \(account.name).")
+            return
+        }
         phase = .loading
-        let c = PlexClient(accountToken: token)
-        do {
-            try await c.discoverServer()
-            client = c
-            serverName = c.serverName
-            AudioPlayer.shared.onTimeline = { key, state, t, d in
-                Task { await c.reportTimeline(ratingKey: key, state: state, timeMs: t, durationMs: d) }
+        let p = ProviderFactory.make(for: account, token: token)
+        Task {
+            do {
+                try await p.connect()
+                provider = p
+                serverName = p.displayName.isEmpty ? account.name : p.displayName
+                AudioPlayer.shared.onTimeline = { key, state, t, d in
+                    Task { await p.reportTimeline(ratingKey: key, state: state, timeMs: t, durationMs: d) }
+                }
+                artists = (try? await p.artists()) ?? []
+                playlists = (try? await p.playlists()) ?? []
+                phase = .ready
+            } catch {
+                phase = .error("Could not connect to \(account.name): \(error.localizedDescription)")
             }
-            let secs = try await c.musicSections()
-            sections = secs
-            if let first = secs.first {
-                artists = try await c.artists(sectionKey: first.key)
-            }
-            async let pls = (try? await c.playlists()) ?? []
-            playlists = await pls
-            phase = .ready
-        } catch {
-            phase = .error("Could not reach your Plex server: \(error.localizedDescription)")
         }
     }
 
     // MARK: browse
 
     func albums(of artist: PlexMetadata) async -> [PlexMetadata] {
-        (try? await client?.children(ratingKey: artist.ratingKey)) ?? []
+        (try? await provider?.albums(of: artist)) ?? []
     }
 
     func tracks(of album: PlexMetadata) async -> [PlexMetadata] {
-        (try? await client?.children(ratingKey: album.ratingKey)) ?? []
+        (try? await provider?.tracks(of: album)) ?? []
     }
 
-    // MARK: search (task #3)
+    // MARK: search
 
     func runSearch(_ query: String) {
-        Task {
-            searchHits = (try? await client?.search(query)) ?? []
-        }
+        Task { searchHits = (try? await provider?.search(query)) ?? [] }
     }
 
-    // MARK: similar artists (task #4)
+    // MARK: similar artists
 
     func loadSimilar(for artist: PlexMetadata) {
         Task {
-            var hits = (try? await client?.relatedArtists(ratingKey: artist.ratingKey)) ?? []
+            var hits = (try? await provider?.relatedArtists(ratingKey: artist.ratingKey)) ?? []
             if hits.isEmpty {
-                // Fall back to Prism's imported edges, matched to the live library by name.
                 let similarNames = similarFromImport(artist.title)
                 hits = artists.filter { similarNames.contains($0.title) }
             }
@@ -124,36 +151,34 @@ final class AppModel: ObservableObject {
         return Set(rows)
     }
 
-    // MARK: playlists (task #2)
+    // MARK: playlists
 
     func reloadPlaylists() {
-        Task { playlists = (try? await client?.playlists()) ?? [] }
+        Task { playlists = (try? await provider?.playlists()) ?? [] }
     }
 
     func playlistTracks(_ playlist: PlexMetadata) async -> [PlexMetadata] {
-        (try? await client?.playlistItems(id: playlist.ratingKey)) ?? []
+        (try? await provider?.playlistItems(id: playlist.ratingKey)) ?? []
     }
 
     func createPlaylist(title: String, from tracks: [PlexMetadata]) {
         Task {
-            _ = try? await client?.createPlaylist(title: title, trackRatingKeys: tracks.map(\.ratingKey))
+            try? await provider?.createPlaylist(title: title, trackRatingKeys: tracks.map(\.ratingKey))
             reloadPlaylists()
         }
     }
 
     func addToPlaylist(_ playlist: PlexMetadata, tracks: [PlexMetadata]) {
-        Task { try? await client?.addToPlaylist(id: playlist.ratingKey, trackRatingKeys: tracks.map(\.ratingKey)) }
+        Task { try? await provider?.addToPlaylist(id: playlist.ratingKey, trackRatingKeys: tracks.map(\.ratingKey)) }
     }
 
-    /// Recreate an imported Prism playlist on the Plex server from its track
-    /// ratingKeys (task #9 bridge).
     func recreatePrismPlaylist(named name: String) {
         let keys = (try? AppDatabase.shared.dbQueue.read { db in
             try String.fetchAll(db, sql: "SELECT ratingKey FROM prismPlaylist WHERE name = ? AND ratingKey IS NOT NULL ORDER BY position", arguments: [name])
         }) ?? []
         guard !keys.isEmpty else { return }
         Task {
-            _ = try? await client?.createPlaylist(title: name, trackRatingKeys: keys)
+            try? await provider?.createPlaylist(title: name, trackRatingKeys: keys)
             reloadPlaylists()
         }
     }
@@ -162,47 +187,40 @@ final class AppModel: ObservableObject {
 
     func deletePlaylist(_ playlist: PlexMetadata) {
         Task {
-            try? await client?.deletePlaylist(id: playlist.ratingKey)
+            try? await provider?.deletePlaylist(id: playlist.ratingKey)
             reloadPlaylists()
         }
     }
 
-    // MARK: ratings (task #1) — persist locally AND push to Plex
+    // MARK: ratings — persist locally AND push to the provider
 
     func rate(_ track: PlexMetadata, stars: Int) {
         AppDatabase.shared.setRating(stars, ratingKey: track.ratingKey, title: track.title, artist: track.grandparentTitle)
         AudioPlayer.shared.setCurrentRating(stars)
-        Task { try? await client?.rate(ratingKey: track.ratingKey, stars: stars) }
+        Task { try? await provider?.rate(ratingKey: track.ratingKey, stars: stars) }
     }
 
     func rateCurrent(stars: Int) {
         guard let t = AudioPlayer.shared.current else { return }
         AppDatabase.shared.setRating(stars, ratingKey: t.id, title: t.title, artist: t.artist)
         AudioPlayer.shared.setCurrentRating(stars)
-        Task { try? await client?.rate(ratingKey: t.id, stars: stars) }
+        Task { try? await provider?.rate(ratingKey: t.id, stars: stars) }
     }
 
     func rating(_ ratingKey: String) -> Int? { AppDatabase.shared.rating(forRatingKey: ratingKey) }
 
-    // MARK: downloads (task #5)
+    // MARK: downloads
 
     func download(_ m: PlexMetadata) {
-        guard let part = m.firstPartKey, let url = client?.streamURL(partKey: part) else { return }
+        guard let url = provider?.downloadURL(for: m) else { return }
         DownloadManager.shared.download(ratingKey: m.ratingKey, from: url, title: m.title,
                                         artist: m.grandparentTitle, durationMs: m.duration ?? 0, codec: m.codec)
     }
 
-    // MARK: playable resolution (local → native stream → transcode, task #7)
+    // MARK: playable resolution (local → provider)
 
     func playable(_ m: PlexMetadata, albumTitle: String, artist: String) -> PlayableTrack? {
-        let url: URL?
-        if let local = DownloadManager.shared.localURL(m.ratingKey) {
-            url = local
-        } else if AudioCapability.canPlayNatively(m.codec) {
-            url = m.firstPartKey.flatMap { client?.streamURL(partKey: $0) }
-        } else {
-            url = client?.transcodeURL(ratingKey: m.ratingKey)   // ape, wma, …
-        }
+        let url: URL? = DownloadManager.shared.localURL(m.ratingKey) ?? provider?.playableURL(for: m)
         guard let url else { return nil }
         return PlayableTrack(
             id: m.ratingKey,
@@ -211,12 +229,11 @@ final class AppModel: ObservableObject {
             album: albumTitle.isEmpty ? (m.parentTitle ?? "") : albumTitle,
             url: url,
             durationMs: m.duration ?? 0,
-            artworkURL: client?.imageURL(thumb: m.thumb),
+            artworkURL: provider?.artworkURL(m.thumb, size: 300),
             userRating: rating(m.ratingKey) ?? m.userRating.map { Int($0 / 2) }
         )
     }
 
-    /// Build playables for a list and start playback at `index`.
     func play(_ list: [PlexMetadata], startAt index: Int, albumTitle: String = "", artist: String = "") {
         let playables = list.compactMap { playable($0, albumTitle: albumTitle, artist: artist) }
         guard !playables.isEmpty else { return }
@@ -224,15 +241,13 @@ final class AppModel: ObservableObject {
     }
 
     func imageURL(_ thumb: String?, size: Int = 300) -> URL? {
-        client?.imageURL(thumb: thumb, size: size)
+        provider?.artworkURL(thumb, size: size)
     }
 
     // MARK: offline playback
 
     func downloadedTracks() -> [TrackRecord] { AppDatabase.shared.downloadedTracks() }
 
-    /// Play downloaded tracks straight from local files — works without the
-    /// Plex server reachable.
     func playDownloaded(_ records: [TrackRecord], startAt index: Int) {
         let playables: [PlayableTrack] = records.compactMap { r in
             guard let path = r.localPath, let key = r.ratingKey else { return nil }

@@ -47,7 +47,8 @@ struct RootView: View {
     }
 }
 
-/// Left navigation rail — the app's top-level sections, Prism-style.
+/// Left navigation rail — the app's top-level sections, Prism-style, with an
+/// account switcher at the top (A2: several accounts, across providers).
 struct Sidebar: View {
     @EnvironmentObject var model: AppModel
 
@@ -60,14 +61,37 @@ struct Sidebar: View {
     ]
 
     var body: some View {
-        List(selection: Binding(get: { model.pane }, set: { model.pane = $0 })) {
-            Section(model.serverName) {
+        VStack(spacing: 0) {
+            accountMenu.padding(8)
+            Divider()
+            List(selection: Binding(get: { model.pane }, set: { model.pane = $0 })) {
                 ForEach(items, id: \.0) { pane, label, icon in
                     Label(label, systemImage: icon).tag(pane)
                 }
             }
+            .listStyle(.sidebar)
         }
-        .listStyle(.sidebar)
         .frame(width: 200)
+    }
+
+    private var accountMenu: some View {
+        Menu {
+            ForEach(model.accounts) { acc in
+                Button { model.switchAccount(acc.id) } label: {
+                    Label("\(acc.name)\(acc.id == model.activeAccountID ? " ✓" : "")",
+                          systemImage: acc.kind.systemImage)
+                }
+            }
+            if !model.accounts.isEmpty { Divider() }
+            Button { model.startLink() } label: { Label("Add Plex Account…", systemImage: "plus") }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "person.crop.circle")
+                Text(model.serverName.isEmpty ? "Account" : model.serverName).lineLimit(1)
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .menuStyle(.borderlessButton)
     }
 }
