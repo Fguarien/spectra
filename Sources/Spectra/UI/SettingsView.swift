@@ -64,7 +64,7 @@ struct SettingsView: View {
                 HStack {
                     Button("Add Plex…") { model.startLink() }
                     Button("Add Local Folder…") { model.promptAddLocalFolder() }
-                    Button("Add YouTube Music") { model.addYouTubeMusicAccount() }
+                    Button("Add YouTube Music") { model.promptAddYouTubeMusic() }
                 }
                 .buttonStyle(.bordered).controlSize(.small)
             }

@@ -81,11 +81,27 @@ final class AppModel: ObservableObject {
         addLocalAccount(path: url.path)
     }
 
-    /// Add an anonymous YouTube Music account (search + play). Personal library
-    /// via cookies is a later increment; the token is empty for now.
-    func addYouTubeMusicAccount() {
+    /// Add a YouTube Music account. Picking the ytmusicapi `browser.json`
+    /// unlocks the personal library (artists, albums, playlists, Liked Music);
+    /// cancelling adds an anonymous account (search + play only).
+    func promptAddYouTubeMusic() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Use"
+        panel.message = "Choose your ytmusicapi browser.json for your library, or Cancel for search-only."
+        let defaultDir = (NSHomeDirectory() as NSString).appendingPathComponent("Developer/spectra-ytmusic")
+        if FileManager.default.fileExists(atPath: defaultDir) {
+            panel.directoryURL = URL(fileURLWithPath: defaultDir)
+        }
+        let authPath = panel.runModal() == .OK ? panel.url?.path : nil
+        addYouTubeMusicAccount(authPath: authPath)
+    }
+
+    func addYouTubeMusicAccount(authPath: String?) {
         let account = Account(id: UUID().uuidString, kind: .youtubeMusic, name: "YouTube Music")
-        AccountStore.shared.add(account, token: "")
+        AccountStore.shared.add(account, token: authPath ?? "")
         AccountStore.shared.activeID = account.id
         refreshAccounts()
         connect(account: account)

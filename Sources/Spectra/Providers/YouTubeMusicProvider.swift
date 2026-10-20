@@ -1,17 +1,19 @@
 import Foundation
 
-/// Plays from YouTube Music — the replacement for KASET. Shells out to the
-/// `yt-dlp` binary (a self-contained macOS build, with `deno` as the JS runtime
-/// so extraction stays current). The app is not sandboxed, so spawning a
-/// `Process` is allowed.
+/// YouTube Music — the KASET replacement. Two moving parts:
+/// • **browse + search** go through `ytmusic_bridge.py` (ytmusicapi) which emits a
+///   normalized `{"items":[…]}` shape, so the personal library (artists, albums,
+///   playlists, Liked Music) is navigable.
+/// • **playback** resolves each track's stream with `yt-dlp` (videoId → itag-140
+///   m4a → AVPlayer), async per play.
 ///
-/// v1 is **search + play** (KASET's core: find a song, play it). Browsing your
-/// personal library, artists and albums needs an authenticated YouTube Music
-/// session and is a later increment; `cookiesPath` (a Netscape cookies.txt)
-/// is already threaded through for when it lands.
+/// The account token is the path to the ytmusicapi `browser.json` the user
+/// produced from their logged-in session; the venv Python and the bridge script
+/// live beside it (…/spectra-ytmusic/venv/bin/python, …/ytmusic_bridge.py).
+/// With no auth file the provider still does anonymous search + play via yt-dlp.
 ///
-/// Note (unspoken truth): this uses yt-dlp against YouTube, which is contrary
-/// to YouTube's ToS — same as KASET did. It's for personal listening only.
+/// ToS note: yt-dlp/ytmusicapi vs. YouTube is contrary to YouTube's ToS (as KASET
+/// was). Personal listening only.
 final class YouTubeMusicProvider: MusicProvider {
     let kind: ProviderKind = .youtubeMusic
     let capabilities = ProviderCapabilities(
@@ -19,64 +21,77 @@ final class YouTubeMusicProvider: MusicProvider {
         canSearch: true, canHaveSimilar: false, resolvesStreamLazily: true
     )
 
-    private let cookiesPath: String?
-    private var binary = "/usr/local/bin/yt-dlp"
+    private let authPath: String?       // browser.json, or nil for anonymous
+    private var ytdlp = "/usr/local/bin/yt-dlp"
+    private var python: String?         // venv python beside the bridge
+    private var bridge: String?         // ytmusic_bridge.py
 
-    init(cookiesPath: String?) {
-        self.cookiesPath = (cookiesPath?.isEmpty ?? true) ? nil : cookiesPath
+    init(authPath: String?) {
+        self.authPath = (authPath?.isEmpty ?? true) ? nil : authPath
     }
 
     var displayName: String { "YouTube Music" }
+    private var hasBridge: Bool { python != nil && bridge != nil }
 
     func connect() async throws {
-        guard let bin = Self.findBinary() else { throw YTError.noBinary }
-        binary = bin
+        guard let bin = Self.findYtDlp() else { throw YTError.noBinary }
+        ytdlp = bin
+        // Locate the ytmusicapi bridge: beside the auth file, else the default dir.
+        let dir = authPath.map { ($0 as NSString).deletingLastPathComponent }
+            ?? (NSHomeDirectory() as NSString).appendingPathComponent("Developer/spectra-ytmusic")
+        let py = (dir as NSString).appendingPathComponent("venv/bin/python")
+        let br = (dir as NSString).appendingPathComponent("ytmusic_bridge.py")
+        if FileManager.default.isExecutableFile(atPath: py), FileManager.default.fileExists(atPath: br) {
+            python = py; bridge = br
+        }
     }
 
-    // MARK: browse — v1 has no authenticated library browse yet
+    // MARK: browse (via the bridge; empty when it isn't available)
 
-    func artists() async throws -> [PlexMetadata] { [] }
-    func albums(of artist: PlexMetadata) async throws -> [PlexMetadata] { [] }
-    func tracks(of album: PlexMetadata) async throws -> [PlexMetadata] { [] }
-    func playlists() async throws -> [PlexMetadata] { [] }
-    func playlistItems(id: String) async throws -> [PlexMetadata] { [] }
+    func artists() async throws -> [PlexMetadata] {
+        try await bridgeItems("library_artists").map { $0.asMetadata() }
+    }
+    func albums(of artist: PlexMetadata) async throws -> [PlexMetadata] {
+        guard let id = Self.strip(artist.ratingKey, "ytA:") else { return [] }
+        return try await bridgeItems("artist_albums", id).map { $0.asMetadata() }
+    }
+    func tracks(of album: PlexMetadata) async throws -> [PlexMetadata] {
+        guard let id = Self.strip(album.ratingKey, "ytB:") else { return [] }
+        return try await bridgeItems("album_tracks", id).map { $0.asMetadata(albumTitle: album.title) }
+    }
+    func playlists() async throws -> [PlexMetadata] {
+        try await bridgeItems("playlists").map { $0.asMetadata() }
+    }
+    func playlistItems(id: String) async throws -> [PlexMetadata] {
+        guard let pid = Self.strip(id, "ytP:") else { return [] }
+        return try await bridgeItems("playlist_tracks", pid).map { $0.asMetadata() }
+    }
     func relatedArtists(ratingKey: String) async throws -> [PlexMetadata] { [] }
 
-    // MARK: search
+    // MARK: search — bridge (richer) if present, else yt-dlp
 
     func search(_ query: String) async throws -> [HubContainerResponse.Hub] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return [] }
-        let out = try await run(["-J", "--flat-playlist", "--no-warnings", "--ignore-errors",
-                                 "ytsearch25:\(q)"])
-        guard let data = out.data(using: .utf8),
-              let result = try? JSONDecoder().decode(YTSearchResult.self, from: data) else { return [] }
-        let tracks: [PlexMetadata] = (result.entries ?? []).compactMap { e in
-            guard let id = e.id, let title = e.title else { return nil }
-            return PlexMetadata(
-                ratingKey: "yt:\(id)", title: title, type: "track",
-                thumb: e.thumbnails?.last?.url,                     // a full https URL
-                grandparentTitle: e.channel ?? e.uploader,
-                duration: Int((e.duration ?? 0) * 1000)
-            )
+        if hasBridge {
+            let tracks = (try? await bridgeItems("search", q))?.map { $0.asMetadata() } ?? []
+            return tracks.isEmpty ? [] : [.init(title: "Songs", type: "track", items: tracks)]
         }
-        return tracks.isEmpty ? [] : [.init(title: "Songs", type: "track", items: tracks)]
+        return try await searchViaYtDlp(q)
     }
 
     // MARK: URLs
 
-    /// Sync path unused — YouTube needs async resolution (`resolvesStreamLazily`).
-    func playableURL(for m: PlexMetadata) -> URL? { nil }
+    func playableURL(for m: PlexMetadata) -> URL? { nil }   // async path (lazy)
 
     func resolveStreamURL(for m: PlexMetadata) async -> URL? {
-        guard let id = Self.videoID(m.ratingKey) else { return nil }
-        guard let out = try? await run(["-f", "140/bestaudio[ext=m4a]/bestaudio",
-                                        "-g", "--no-warnings", id]) else { return nil }
+        guard let id = Self.strip(m.ratingKey, "yt:") else { return nil }
+        guard let out = try? await runYtDlp(["-f", "140/bestaudio[ext=m4a]/bestaudio",
+                                             "-g", "--no-warnings", id]) else { return nil }
         return out.split(separator: "\n").first.flatMap { URL(string: String($0)) }
     }
 
     func downloadURL(for m: PlexMetadata) -> URL? { nil }
-    /// YouTube thumbnails are already absolute URLs stored in `thumb`.
     func artworkURL(_ thumb: String?, size: Int) -> URL? { thumb.flatMap { URL(string: $0) } }
 
     // MARK: server hooks — inert
@@ -87,30 +102,54 @@ final class YouTubeMusicProvider: MusicProvider {
     func addToPlaylist(id: String, trackRatingKeys: [String]) async throws { throw ProviderError.notImplemented(.youtubeMusic) }
     func deletePlaylist(id: String) async throws { throw ProviderError.notImplemented(.youtubeMusic) }
 
+    // MARK: bridge plumbing
+
+    private func bridgeItems(_ cmd: String, _ arg: String? = nil) async throws -> [BridgeItem] {
+        guard let python, let bridge else { return [] }
+        var args = [bridge, authPath ?? "-", cmd]
+        if let arg { args.append(arg) }
+        let out = try await runProcess(python, args)
+        guard let data = out.data(using: .utf8),
+              let resp = try? JSONDecoder().decode(BridgeResponse.self, from: data) else { return [] }
+        if let err = resp.error { throw YTError.ytdlp(err) }
+        return resp.items ?? []
+    }
+
     // MARK: yt-dlp plumbing
 
-    private static func findBinary() -> String? {
+    private static func findYtDlp() -> String? {
         for p in ["/usr/local/bin/yt-dlp", "/opt/homebrew/bin/yt-dlp"] where FileManager.default.isExecutableFile(atPath: p) {
             return p
         }
         return nil
     }
 
-    private static func videoID(_ ratingKey: String) -> String? {
-        ratingKey.hasPrefix("yt:") ? String(ratingKey.dropFirst(3)) : nil
+    private static func strip(_ ratingKey: String, _ prefix: String) -> String? {
+        ratingKey.hasPrefix(prefix) ? String(ratingKey.dropFirst(prefix.count)) : nil
     }
 
-    /// Run yt-dlp off the main actor and capture stdout. stdout is drained before
-    /// `waitUntilExit` to avoid a full-pipe deadlock on large JSON.
-    private func run(_ args: [String]) async throws -> String {
-        let bin = binary
-        let cookies = cookiesPath
+    private func searchViaYtDlp(_ q: String) async throws -> [HubContainerResponse.Hub] {
+        let out = try await runYtDlp(["-J", "--flat-playlist", "--no-warnings", "ytsearch25:\(q)"])
+        guard let data = out.data(using: .utf8),
+              let result = try? JSONDecoder().decode(YTFlatSearch.self, from: data) else { return [] }
+        let tracks: [PlexMetadata] = (result.entries ?? []).compactMap { e in
+            guard let id = e.id, let title = e.title else { return nil }
+            return PlexMetadata(ratingKey: "yt:\(id)", title: title, type: "track",
+                                thumb: e.thumbnails?.last?.url, grandparentTitle: e.channel ?? e.uploader,
+                                duration: Int((e.duration ?? 0) * 1000))
+        }
+        return tracks.isEmpty ? [] : [.init(title: "Songs", type: "track", items: tracks)]
+    }
+
+    private func runYtDlp(_ args: [String]) async throws -> String { try await runProcess(ytdlp, args) }
+
+    /// Run a binary off the main actor, draining stdout before waiting (no pipe
+    /// deadlock on large JSON).
+    private func runProcess(_ binary: String, _ args: [String]) async throws -> String {
         return try await Task.detached(priority: .userInitiated) {
             let p = Process()
-            p.executableURL = URL(fileURLWithPath: bin)
-            var a = args
-            if let cookies { a += ["--cookies", cookies] }
-            p.arguments = a
+            p.executableURL = URL(fileURLWithPath: binary)
+            p.arguments = args
             let out = Pipe(), err = Pipe()
             p.standardOutput = out
             p.standardError = err
@@ -126,9 +165,44 @@ final class YouTubeMusicProvider: MusicProvider {
     }
 }
 
-// MARK: - yt-dlp JSON
+// MARK: - bridge JSON (normalized by ytmusic_bridge.py)
 
-private struct YTSearchResult: Decodable { let entries: [YTEntry]? }
+private struct BridgeResponse: Decodable {
+    let items: [BridgeItem]?
+    let error: String?
+}
+
+private struct BridgeItem: Decodable {
+    let id: String
+    let title: String?
+    let subtitle: String?
+    let type: String
+    let thumb: String?
+    let duration: Int?
+    let year: String?
+
+    /// Map the normalized item to the app's Plex-shaped interchange model.
+    func asMetadata(albumTitle: String? = nil) -> PlexMetadata {
+        switch type {
+        case "artist":
+            return PlexMetadata(ratingKey: "ytA:\(id)", title: title ?? "Artist", type: "artist", thumb: thumb)
+        case "album":
+            return PlexMetadata(ratingKey: "ytB:\(id)", title: title ?? "Album", type: "album",
+                                thumb: thumb, parentTitle: subtitle, grandparentTitle: subtitle,
+                                year: year.flatMap { Int($0) })
+        case "playlist":
+            return PlexMetadata(ratingKey: "ytP:\(id)", title: title ?? "Playlist", type: "playlist", thumb: thumb)
+        default:  // track
+            return PlexMetadata(ratingKey: "yt:\(id)", title: title ?? "Track", type: "track",
+                                thumb: thumb, parentTitle: albumTitle, grandparentTitle: subtitle,
+                                duration: (duration ?? 0) * 1000)
+        }
+    }
+}
+
+// MARK: - yt-dlp flat search JSON (anonymous fallback)
+
+private struct YTFlatSearch: Decodable { let entries: [YTEntry]? }
 private struct YTEntry: Decodable {
     let id: String?
     let title: String?

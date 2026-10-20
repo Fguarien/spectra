@@ -90,7 +90,7 @@ enum ProviderFactory {
         switch account.kind {
         case .plex: return PlexProvider(token: token)
         case .local: return LocalFilesProvider(rootPath: token)   // token = folder path
-        case .youtubeMusic: return YouTubeMusicProvider(cookiesPath: token.isEmpty ? nil : token)
+        case .youtubeMusic: return YouTubeMusicProvider(authPath: token.isEmpty ? nil : token)
         }
     }
 }

@@ -26,7 +26,7 @@ struct LoginView: View {
                         .buttonStyle(.borderedProminent)
                     Button("Add a Local Folder") { model.promptAddLocalFolder() }
                         .controlSize(.large)
-                    Button("Add YouTube Music") { model.addYouTubeMusicAccount() }
+                    Button("Add YouTube Music") { model.promptAddYouTubeMusic() }
                         .controlSize(.large)
                 }
             }
