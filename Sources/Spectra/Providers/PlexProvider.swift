@@ -10,7 +10,9 @@ final class PlexProvider: MusicProvider {
     )
 
     private let client: PlexClient
-    private var firstSectionKey: String?
+    /// Every music library of the server (a server can have several:
+    /// « Classique », « Musique »…). Only the first was read before v2.0.3.
+    private var sectionKeys: [String] = []
 
     init(token: String) { client = PlexClient(accountToken: token) }
 
@@ -18,12 +20,13 @@ final class PlexProvider: MusicProvider {
 
     func connect() async throws {
         try await client.discoverServer()
-        firstSectionKey = try await client.musicSections().first?.key
+        sectionKeys = try await client.musicSections().map(\.key)
     }
 
     func artists() async throws -> [PlexMetadata] {
-        guard let key = firstSectionKey else { return [] }
-        return try await client.artists(sectionKey: key)
+        var out: [PlexMetadata] = []
+        for key in sectionKeys { out += try await client.artists(sectionKey: key) }
+        return out
     }
 
     func albums(of artist: PlexMetadata) async throws -> [PlexMetadata] {
@@ -36,11 +39,15 @@ final class PlexProvider: MusicProvider {
 
     /// Whole section in two calls: tracks, then albums for genre / year / cover.
     func catalog() async throws -> [PlexMetadata] {
-        guard let key = firstSectionKey else { return [] }
-        async let tracks = client.allItems(sectionKey: key, type: 10)
-        async let albums = client.allItems(sectionKey: key, type: 9)
-        let byAlbum = Dictionary((try await albums).map { ($0.ratingKey, $0) }, uniquingKeysWith: { a, _ in a })
-        return try await tracks.map { t in
+        var tracks: [PlexMetadata] = [], albums: [PlexMetadata] = []
+        for key in sectionKeys {
+            async let t = client.allItems(sectionKey: key, type: 10)
+            async let a = client.allItems(sectionKey: key, type: 9)
+            tracks += try await t
+            albums += try await a
+        }
+        let byAlbum = Dictionary(albums.map { ($0.ratingKey, $0) }, uniquingKeysWith: { a, _ in a })
+        return tracks.map { t in
             var t = t
             if let a = t.parentRatingKey.flatMap({ byAlbum[$0] }) {
                 if t.Genre == nil { t.Genre = a.Genre }

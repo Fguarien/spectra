@@ -55,6 +55,29 @@ struct CoverView: View {
     }
 }
 
+/// Source badge drawn on a cover's top-right corner: one glyph per library
+/// the album / song comes from (Plex, local folder, YouTube Music).
+struct CoverSourceBadge: View {
+    @EnvironmentObject var model: AppModel
+    let accountIDs: [String]
+
+    var body: some View {
+        let accs = accountIDs.compactMap { id in model.accounts.first { $0.id == id } }
+        if !accs.isEmpty {
+            HStack(spacing: 4) {
+                ForEach(accs) { acc in
+                    Image(systemName: acc.kind.systemImage).help(acc.name)
+                }
+            }
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6).padding(.vertical, 4)
+            .background(.black.opacity(0.55), in: Capsule())
+            .padding(6)
+        }
+    }
+}
+
 /// Grid ↔ list switch shown in the toolbar of pages that have both.
 enum ViewMode: String { case grid, list }
 
@@ -135,6 +158,7 @@ struct AlbumCell: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             CoverView(url: model.coverURL(album.coverTrack, size: 500))
+                .overlay(alignment: .topTrailing) { CoverSourceBadge(accountIDs: album.accountIDs) }
                 .overlay(alignment: .bottomLeading) {
                     if hover {
                         HStack {
@@ -233,6 +257,7 @@ struct AlbumDetailView: View {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .bottom, spacing: 24) {
                     CoverView(url: model.coverURL(album.coverTrack, size: 900), radius: 8)
+                        .overlay(alignment: .topTrailing) { CoverSourceBadge(accountIDs: album.accountIDs) }
                         .frame(width: 250, height: 250)
                         .shadow(radius: 8, y: 4)
                     VStack(alignment: .leading, spacing: 6) {
@@ -589,6 +614,7 @@ struct ArtistDetail: View {
                 ForEach(artist.albums.reversed()) { album in
                     HStack(alignment: .top, spacing: 20) {
                         CoverView(url: model.coverURL(album.coverTrack, size: 500))
+                            .overlay(alignment: .topTrailing) { CoverSourceBadge(accountIDs: album.accountIDs) }
                             .frame(width: 170, height: 170)
                             .onTapGesture { model.openAlbum = album }
                             .contextMenu { AlbumMenu(album: album) }
@@ -787,6 +813,7 @@ struct PlaylistArtGrid: View {
             ForEach(Array(tracks.enumerated()), id: \.element.id) { i, t in
                 VStack(alignment: .leading, spacing: 2) {
                     CoverView(url: model.coverURL(t, size: 400))
+                        .overlay(alignment: .topTrailing) { CoverSourceBadge(accountIDs: [t.accountID]) }
                         .onTapGesture(count: 2) { model.play(catalog: tracks, startAt: i) }
                     Text(t.title).font(.system(size: 12, weight: .medium)).lineLimit(1)
                     Text(t.artist).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)

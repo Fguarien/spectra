@@ -362,7 +362,6 @@ final class AppModel: ObservableObject {
     private func performSearch(_ raw: String) async {
         let q = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { searchHits = []; searching = false; return }
-        if pane != .search { pane = .search }
         searching = true
         let targets: [(Int, Account, any MusicProvider)] = accounts.enumerated().compactMap { i, acc in
             pool[acc.id].map { (i, acc, $0) }

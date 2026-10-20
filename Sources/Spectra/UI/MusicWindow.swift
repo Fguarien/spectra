@@ -58,7 +58,8 @@ struct MusicSidebar: View {
     @ObservedObject private var catalog = CatalogStore.shared
 
     var body: some View {
-        List(selection: Binding(get: { model.pane }, set: { model.pane = $0; model.openAlbum = nil })) {
+        List(selection: Binding(get: { model.pane },
+                                set: { model.pane = $0; model.openAlbum = nil; model.searchQuery = "" })) {
             Section("Library") {
                 row(.recentlyAdded, "Recently Added", "clock")
                 row(.artists, "Artists", "music.mic")
@@ -138,7 +139,11 @@ struct ContentRouter: View {
 
     var body: some View {
         Group {
-            if let album = model.openAlbum {
+            // Like Music.app: typing in the sidebar field shows the results
+            // over whatever page is open; clearing it brings the page back.
+            if !model.searchQuery.trimmingCharacters(in: .whitespaces).isEmpty {
+                SearchView()
+            } else if let album = model.openAlbum {
                 AlbumDetailView(album: album)
             } else {
                 switch model.pane {
