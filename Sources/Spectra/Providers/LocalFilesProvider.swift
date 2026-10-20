@@ -47,7 +47,7 @@ final class LocalFilesProvider: MusicProvider {
         }
         let root = self.root
         index = try await Task.detached(priority: .userInitiated) {
-            try LocalFilesProvider.buildIndex(root: root)
+            try await LocalFilesProvider.buildIndex(root: root)
         }.value
     }
 
@@ -110,7 +110,7 @@ final class LocalFilesProvider: MusicProvider {
 
     // MARK: scanning
 
-    private static func buildIndex(root: URL) throws -> Index {
+    private static func buildIndex(root: URL) async throws -> Index {
         let fm = FileManager.default
         let rootComps = root.standardizedFileURL.pathComponents
 
@@ -123,26 +123,46 @@ final class LocalFilesProvider: MusicProvider {
         struct Track { let url: URL; let index: Int?; let title: String }
         var tree: [String: [String: [Track]]] = [:]       // artist → album → tracks
         var coverFor: [String: String] = [:]              // "artist/album" → image path
+        var flatFiles: [URL] = []                          // audio with no artist dir → resolve by tags/name
 
         guard let en = fm.enumerator(at: root, includingPropertiesForKeys: nil,
                                      options: [.skipsHiddenFiles]) else {
             return Index()
         }
-        for case let url as URL in en {
+        let allURLs = en.allObjects.compactMap { $0 as? URL }   // snapshot before any await
+        for url in allURLs {
             let ext = url.pathExtension.lowercased()
             let dirs = relComponents(url).dropLast()
-            let artist = dirs.first ?? "Unknown Artist"
-            let album = dirs.count >= 2 ? dirs.last! : (dirs.first ?? "Unknown Album")
 
             if imageExts.contains(ext) {
+                let a = dirs.first ?? "Unknown Artist"
+                let al = dirs.count >= 2 ? dirs.last! : (dirs.first ?? "Unknown Album")
                 if coverNames.contains(url.deletingPathExtension().lastPathComponent.lowercased()) {
-                    coverFor["\(artist)/\(album)"] = url.path
+                    coverFor["\(a)/\(al)"] = url.path
                 }
                 continue
             }
             guard audioExts.contains(ext) else { continue }
-            let (idx, title) = parseTrackName(url.deletingPathExtension().lastPathComponent)
-            tree[artist, default: [:]][album, default: []].append(Track(url: url, index: idx, title: title))
+
+            if let artist = dirs.first {
+                // Structured library (Artist/Album/Track): trust the path.
+                let album = dirs.count >= 2 ? dirs.last! : artist
+                let (idx, title) = parseTrackName(url.deletingPathExtension().lastPathComponent)
+                tree[artist, default: [:]][album, default: []].append(Track(url: url, index: idx, title: title))
+            } else {
+                // Loose file at the root: resolve from embedded tags / filename below.
+                flatFiles.append(url)
+            }
+        }
+
+        // Resolve flat files concurrently (bounded) from embedded tags, then from
+        // a "Artist - Title" filename, then fall back to Unknown.
+        if !flatFiles.isEmpty {
+            let resolved = await resolveFlat(flatFiles)
+            for r in resolved {
+                tree[r.artist, default: [:]][r.album, default: []]
+                    .append(Track(url: r.url, index: nil, title: r.title))
+            }
         }
 
         let ci: (String, String) -> Bool = { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
@@ -190,6 +210,67 @@ final class LocalFilesProvider: MusicProvider {
         let rest = s.dropFirst(digits.count).drop { " .-_)".contains($0) }
         let title = String(rest).trimmingCharacters(in: .whitespaces)
         return (n, title.isEmpty ? s : title)
+    }
+
+    private struct FlatResolved { let url: URL; let artist: String; let album: String; let title: String }
+
+    /// Resolve loose (root-level) files: embedded tags first, then a
+    /// "Artist - Title" filename, then Unknown. Bounded concurrency so a large
+    /// liked-songs dump doesn't spawn thousands of AVAssets at once.
+    private static func resolveFlat(_ urls: [URL]) async -> [FlatResolved] {
+        let batch = 16
+        var out: [FlatResolved] = []
+        out.reserveCapacity(urls.count)
+        var i = 0
+        while i < urls.count {
+            let slice = Array(urls[i..<min(i + batch, urls.count)])
+            let part = await withTaskGroup(of: FlatResolved.self) { group -> [FlatResolved] in
+                for url in slice { group.addTask { await resolveOneFlat(url) } }
+                var acc: [FlatResolved] = []
+                for await r in group { acc.append(r) }
+                return acc
+            }
+            out.append(contentsOf: part)
+            i += batch
+        }
+        return out
+    }
+
+    private static func resolveOneFlat(_ url: URL) async -> FlatResolved {
+        let base = url.deletingPathExtension().lastPathComponent
+        let tags = await readTags(url)
+        if let a = tags.artist, !a.isEmpty {
+            return FlatResolved(url: url, artist: a,
+                                album: tags.album ?? "Singles",
+                                title: (tags.title?.isEmpty == false ? tags.title! : base))
+        }
+        if let (a, t) = splitArtistTitle(base) {
+            return FlatResolved(url: url, artist: a, album: tags.album ?? "Singles", title: t)
+        }
+        return FlatResolved(url: url, artist: "Unknown Artist",
+                            album: tags.album ?? "Unknown Album",
+                            title: (tags.title?.isEmpty == false ? tags.title! : base))
+    }
+
+    /// Read the common artist/album/title tags via AVFoundation (best-effort).
+    private static func readTags(_ url: URL) async -> (artist: String?, album: String?, title: String?) {
+        let asset = AVURLAsset(url: url)
+        guard let items = try? await asset.load(.commonMetadata) else { return (nil, nil, nil) }
+        func value(_ id: AVMetadataIdentifier) async -> String? {
+            guard let item = AVMetadataItem.metadataItems(from: items, filteredByIdentifier: id).first else { return nil }
+            return (try? await item.load(.stringValue)) ?? nil
+        }
+        return (await value(.commonIdentifierArtist),
+                await value(.commonIdentifierAlbumName),
+                await value(.commonIdentifierTitle))
+    }
+
+    /// "Artist - Title" → ("Artist", "Title"), splitting on the first " - ".
+    private static func splitArtistTitle(_ name: String) -> (String, String)? {
+        guard let r = name.range(of: " - ") else { return nil }
+        let a = name[..<r.lowerBound].trimmingCharacters(in: .whitespaces)
+        let t = name[r.upperBound...].trimmingCharacters(in: .whitespaces)
+        return (a.isEmpty || t.isEmpty) ? nil : (a, t)
     }
 }
 
