@@ -92,6 +92,14 @@ final class YouTubeMusicProvider: MusicProvider {
     }
 
     func downloadURL(for m: PlexMetadata) -> URL? { nil }
+
+    /// A plain GET of the `-g` URL is refused (HTTP 403, measured 2026-10-20):
+    /// googlevideo wants yt-dlp's chunked range requests. Let yt-dlp write it.
+    func downloadFile(for m: PlexMetadata, to dest: URL) async throws {
+        guard let id = Self.strip(m.ratingKey, "yt:") else { throw YTError.ytdlp("not a track") }
+        _ = try await runYtDlp(["-q", "--no-warnings", "--no-part", "--force-overwrites",
+                                "-f", "140/bestaudio[ext=m4a]/bestaudio", "-o", dest.path, id])
+    }
     func artworkURL(_ thumb: String?, size: Int) -> URL? { thumb.flatMap { URL(string: $0) } }
 
     // MARK: server hooks — inert

@@ -17,6 +17,9 @@ struct DownloadsView: View {
                 }
             }
             .padding(16)
+            if let err = downloads.lastError {
+                Text(err).font(.caption).foregroundStyle(.orange).padding(.horizontal, 16).padding(.bottom, 8)
+            }
 
             if records.isEmpty {
                 Spacer()

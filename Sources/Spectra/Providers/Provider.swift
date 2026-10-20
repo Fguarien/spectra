@@ -60,6 +60,10 @@ protocol MusicProvider: AnyObject {
     /// Resolve the real stream URL, possibly via a network call (streaming
     /// providers). Defaults to the synchronous `playableURL`.
     func resolveStreamURL(for m: PlexMetadata) async -> URL?
+    /// Download the track to `dest` by the provider's own means, for sources
+    /// whose stream URL can't be fetched with a plain GET (googlevideo → 403).
+    /// Default: unsupported.
+    func downloadFile(for m: PlexMetadata, to dest: URL) async throws
     /// Original-quality URL for offline download (nil if not downloadable).
     func downloadURL(for m: PlexMetadata) -> URL?
     func artworkURL(_ thumb: String?, size: Int) -> URL?
@@ -74,6 +78,9 @@ protocol MusicProvider: AnyObject {
 
 extension MusicProvider {
     func resolveStreamURL(for m: PlexMetadata) async -> URL? { playableURL(for: m) }
+    func downloadFile(for m: PlexMetadata, to dest: URL) async throws {
+        throw ProviderError.notImplemented(kind)
+    }
 }
 
 enum ProviderError: LocalizedError {

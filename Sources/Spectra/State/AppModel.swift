@@ -406,9 +406,19 @@ final class AppModel: ObservableObject {
     // MARK: downloads
 
     func download(_ m: PlexMetadata) {
-        guard let url = provider(for: m)?.downloadURL(for: m) else { return }
-        DownloadManager.shared.download(ratingKey: m.ratingKey, from: url, title: m.title,
-                                        artist: m.grandparentTitle, durationMs: m.duration ?? 0, codec: m.codec)
+        guard let p = provider(for: m) else { return }
+        if let url = p.downloadURL(for: m) {
+            DownloadManager.shared.download(ratingKey: m.ratingKey, from: url, title: m.title,
+                                            artist: m.grandparentTitle, durationMs: m.duration ?? 0, codec: m.codec)
+            return
+        }
+        // Streaming providers (YouTube Music) have no fetchable URL: the
+        // provider writes the file itself (yt-dlp, itag 140 = AAC in m4a).
+        guard p.capabilities.resolvesStreamLazily else { return }
+        DownloadManager.shared.download(ratingKey: m.ratingKey, title: m.title, artist: m.grandparentTitle,
+                                        durationMs: m.duration ?? 0, codec: "m4a") { dest in
+            try await p.downloadFile(for: m, to: dest)
+        }
     }
 
     // MARK: playable resolution (local → provider)
