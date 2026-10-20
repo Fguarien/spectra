@@ -12,9 +12,9 @@ struct LibraryView: View {
 
     var body: some View {
         NavigationSplitView {
-            artistColumn
+            artistColumn.persistedColumnWidth("library.artists", min: 160, ideal: 230, max: 480)
         } content: {
-            middleColumn
+            middleColumn.persistedColumnWidth("library.albums", min: 200, ideal: 300, max: 560)
         } detail: {
             TrackListView(album: selectedAlbum, tracks: tracks)
         }

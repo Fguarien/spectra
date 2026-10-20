@@ -14,9 +14,9 @@ struct AllSourcesView: View {
 
     var body: some View {
         NavigationSplitView {
-            artistColumn
+            artistColumn.persistedColumnWidth("all.artists", min: 160, ideal: 250, max: 480)
         } content: {
-            albumColumn
+            albumColumn.persistedColumnWidth("all.albums", min: 200, ideal: 320, max: 560)
         } detail: {
             TrackListView(album: selectedAlbum, tracks: tracks)
         }

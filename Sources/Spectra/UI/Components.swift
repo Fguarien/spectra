@@ -184,3 +184,46 @@ struct SelectedRow: ViewModifier {
 extension View {
     func selectedRow(_ isSelected: Bool) -> some View { modifier(SelectedRow(isSelected: isSelected)) }
 }
+
+/// Remembers a NavigationSplitView column's width across launches.
+/// SwiftUI has no autosave for split columns: the width the user drags is
+/// measured here, stored per column, and fed back as the column's ideal
+/// width on the next launch.
+struct PersistedColumnWidth: ViewModifier {
+    let key: String
+    let min: CGFloat
+    let ideal: CGFloat
+    let max: CGFloat
+    @State private var pending: Task<Void, Never>?
+
+    private var saved: CGFloat {
+        let v = UserDefaults.standard.double(forKey: "column.\(key)")
+        return v > 0 ? Swift.min(Swift.max(CGFloat(v), min), max) : ideal
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .navigationSplitViewColumnWidth(min: min, ideal: saved, max: max)
+            .background(GeometryReader { geo in
+                Color.clear
+                    .onChange(of: geo.size.width) { _, w in store(w) }
+            })
+    }
+
+    /// Debounced: a drag fires dozens of changes.
+    private func store(_ w: CGFloat) {
+        guard w >= min, w <= max else { return }
+        pending?.cancel()
+        pending = Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            UserDefaults.standard.set(Double(w), forKey: "column.\(key)")
+        }
+    }
+}
+
+extension View {
+    func persistedColumnWidth(_ key: String, min: CGFloat, ideal: CGFloat, max: CGFloat) -> some View {
+        modifier(PersistedColumnWidth(key: key, min: min, ideal: ideal, max: max))
+    }
+}

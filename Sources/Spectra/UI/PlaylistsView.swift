@@ -63,6 +63,7 @@ struct PlaylistsView: View {
                 }
             }
             .navigationTitle("Playlists")
+            .persistedColumnWidth("playlists.list", min: 200, ideal: 280, max: 520)
         } detail: {
             detail
         }
