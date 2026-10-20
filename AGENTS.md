@@ -55,6 +55,8 @@ help (`UI/HelpView.swift`) — keep both in step with features.
 - Secrets (tokens, API keys) only in the Keychain (`Support/Keychain.swift`),
   provisioned through one-shot JSON files that are imported then deleted.
   Never in UserDefaults, the database, logs or argv.
+- Signing: `make-app.sh` uses `SPECTRA_SIGN_ID`, else the keychain made by
+  `Tools/make-signing-keychain.sh`, else ad hoc (Keychain re-prompts each build).
 - Nothing environment-specific in the code: endpoints and paths are settings
   with neutral defaults (`~/Music/Spectra`, no LLM endpoint).
 - Catalogue grouping runs off the main actor (`CatalogStore.build` is

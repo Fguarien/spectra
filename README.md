@@ -60,9 +60,23 @@ an app bundle by `make-app.sh`. The only dependency is [GRDB] (pinned). The app
 icon is drawn by `Tools/make-icon.swift` at build time — no binary asset is
 committed.
 
-The bundle is signed ad hoc. The macOS Keychain ties stored tokens to the app's
-signature, so after each rebuild it asks once more for access — choose
-**Always Allow**.
+### Signing (avoids Keychain prompts after each build)
+
+The macOS Keychain ties stored tokens to the app's *designated requirement*.
+Signed ad hoc, that requirement is the binary's hash, so after every rebuild
+the Keychain asks again for each token. `make-app.sh` signs with a stable
+identity when it finds one, in this order:
+
+1. `SPECTRA_SIGN_ID=<identity> ./make-app.sh …` — any code-signing identity
+   you have (e.g. Apple Development);
+2. the « Spectra Local Signing » certificate created once by
+   `Tools/make-signing-keychain.sh` — a self-signed certificate in its own
+   keychain that unlocks without interaction, so it also works when you build
+   over SSH (read the trade-off at the top of the script);
+3. otherwise ad hoc — choose **Always Allow** after each build.
+
+Check: `codesign -dr - /Applications/Spectra.app` should show
+`certificate leaf = H"…"`, not `cdhash H"…"`.
 
 ## Setting up sources
 

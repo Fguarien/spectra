@@ -44,8 +44,29 @@ for b in "${BUILD_DIR}"/*.bundle; do
   [ -e "$b" ] && cp -R "$b" "${APP}/Contents/Resources/" || true
 done
 
-echo "▸ ad-hoc codesign (local run: Keychain + network)"
-codesign --force --deep --sign - "${APP}" >/dev/null 2>&1 || echo "  (codesign skipped)"
+# Signature. Ad hoc, the designated requirement is the cdhash, which changes
+# on every build, so the Keychain asks again for every stored secret after
+# each install. A stable identity avoids that:
+#   - SPECTRA_SIGN_ID=<identity> uses any code-signing identity you have;
+#   - otherwise, if ~/Library/Keychains/spectra-signing.keychain-db exists
+#     (see Tools/make-signing-keychain.sh), its « Spectra Local Signing »
+#     certificate is used — that keychain unlocks without interaction, so it
+#     also works over SSH, where the login keychain's keys are out of reach;
+#   - otherwise ad hoc.
+SIGN_KC="${HOME}/Library/Keychains/spectra-signing.keychain-db"
+SIGN_ID="${SPECTRA_SIGN_ID:-}"
+KC_ARGS=()
+if [ -z "${SIGN_ID}" ] && [ -f "${SIGN_KC}" ]; then
+  security unlock-keychain -p "" "${SIGN_KC}" 2>/dev/null || true
+  SIGN_ID="$(security find-identity -p codesigning "${SIGN_KC}" 2>/dev/null | awk '/Spectra Local Signing/ {print $2; exit}')"
+  [ -n "${SIGN_ID}" ] && KC_ARGS=(--keychain "${SIGN_KC}")
+fi
+if [ -n "${SIGN_ID}" ] && codesign --force --deep ${KC_ARGS[@]+"${KC_ARGS[@]}"} --sign "${SIGN_ID}" "${APP}" >/dev/null 2>&1; then
+  echo "▸ codesigned (stable identity ${SIGN_ID})"
+else
+  echo "▸ ad-hoc codesign — the Keychain will ask again after each build"
+  codesign --force --deep --sign - "${APP}" >/dev/null 2>&1 || echo "  (codesign skipped)"
+fi
 
 if [ "${INSTALL}" -eq 1 ]; then
   echo "▸ installing to /Applications"
