@@ -9,7 +9,7 @@ struct LoginView: View {
                 .resizable().frame(width: 72, height: 72)
                 .foregroundStyle(.tint)
             Text("Spectra").font(.largeTitle.bold())
-            Text("A native music player for your Plex library.")
+            Text("A native music player for Plex and your local files.")
                 .foregroundStyle(.secondary)
 
             if case .linking = model.phase {
@@ -20,9 +20,13 @@ struct LoginView: View {
                         .textSelection(.enabled)
                 }
             } else {
-                Button("Connect to Plex") { model.startLink() }
-                    .controlSize(.large)
-                    .buttonStyle(.borderedProminent)
+                VStack(spacing: 12) {
+                    Button("Connect to Plex") { model.startLink() }
+                        .controlSize(.large)
+                        .buttonStyle(.borderedProminent)
+                    Button("Add a Local Folder") { model.promptAddLocalFolder() }
+                        .controlSize(.large)
+                }
             }
         }
         .padding(60)

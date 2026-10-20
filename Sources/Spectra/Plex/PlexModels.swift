@@ -100,6 +100,49 @@ struct PlexPart: Decodable {
     let container: String?
 }
 
+// MARK: - synthesising rows for non-Plex providers
+
+extension PlexMetadata {
+    /// Builds a row for providers that aren't Plex (Local Files, …). The
+    /// Plex-shaped model stays the app's internal interchange, so every view
+    /// and the player work unchanged. `filePath` is carried in `Media.Part.key`
+    /// (so `firstPartKey` resolves) and `thumb` holds an absolute image path.
+    init(ratingKey: String, title: String, type: String,
+         thumb: String? = nil, parentTitle: String? = nil, grandparentTitle: String? = nil,
+         parentRatingKey: String? = nil, grandparentRatingKey: String? = nil,
+         index: Int? = nil, duration: Int? = nil, year: Int? = nil,
+         leafCount: Int? = nil, filePath: String? = nil, fileContainer: String? = nil) {
+        self.ratingKey = ratingKey
+        self.key = nil
+        self.title = title
+        self.type = type
+        self.thumb = thumb
+        self.art = nil
+        self.parentTitle = parentTitle
+        self.grandparentTitle = grandparentTitle
+        self.parentRatingKey = parentRatingKey
+        self.grandparentRatingKey = grandparentRatingKey
+        self.index = index
+        self.duration = duration
+        self.userRating = nil
+        self.year = year
+        self.leafCount = leafCount
+        self.Media = filePath.map {
+            [PlexMedia(audioCodec: fileContainer, Part: [PlexPart(key: $0, container: fileContainer)])]
+        }
+    }
+}
+
+extension HubContainerResponse.Hub {
+    /// A synthesised search hub for local/offline providers.
+    init(title: String?, type: String?, items: [PlexMetadata]) {
+        self.title = title
+        self.type = type
+        self.Metadata = items
+        self.Directory = nil
+    }
+}
+
 // MARK: - codec capability
 
 /// Codecs AVFoundation decodes natively on macOS. Anything else (notably

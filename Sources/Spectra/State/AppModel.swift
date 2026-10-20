@@ -68,6 +68,28 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Present a folder picker and, on selection, add it as a Local Files
+    /// account and make it active. The folder path is the account's "token".
+    func promptAddLocalFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Add"
+        panel.message = "Choose your music folder (an Artist / Album / Track layout works best)."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        addLocalAccount(path: url.path)
+    }
+
+    func addLocalAccount(path: String) {
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        let account = Account(id: UUID().uuidString, kind: .local, name: name.isEmpty ? "Local" : name)
+        AccountStore.shared.add(account, token: path)
+        AccountStore.shared.activeID = account.id
+        refreshAccounts()
+        connect(account: account)
+    }
+
     func switchAccount(_ id: String) {
         guard let account = accounts.first(where: { $0.id == id }) else { return }
         AccountStore.shared.activeID = id

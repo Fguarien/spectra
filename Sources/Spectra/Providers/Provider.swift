@@ -23,8 +23,8 @@ enum ProviderKind: String, Codable, Hashable, CaseIterable {
         }
     }
 
-    /// Only Plex is wired up today; the others are reserved for phases B/C.
-    var isImplemented: Bool { self == .plex }
+    /// Plex and Local Files are wired up; YouTube Music is reserved for phase C.
+    var isImplemented: Bool { self == .plex || self == .local }
 }
 
 /// What a provider can do, so the UI can hide actions a source doesn't support.
@@ -78,7 +78,8 @@ enum ProviderFactory {
     static func make(for account: Account, token: String) -> any MusicProvider {
         switch account.kind {
         case .plex: return PlexProvider(token: token)
-        case .local, .youtubeMusic: return UnimplementedProvider(kind: account.kind)
+        case .local: return LocalFilesProvider(rootPath: token)   // token = folder path
+        case .youtubeMusic: return UnimplementedProvider(kind: account.kind)
         }
     }
 }

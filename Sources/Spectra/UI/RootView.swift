@@ -84,6 +84,7 @@ struct Sidebar: View {
             }
             if !model.accounts.isEmpty { Divider() }
             Button { model.startLink() } label: { Label("Add Plex Account…", systemImage: "plus") }
+            Button { model.promptAddLocalFolder() } label: { Label("Add Local Folder…", systemImage: "folder.badge.plus") }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "person.crop.circle")
