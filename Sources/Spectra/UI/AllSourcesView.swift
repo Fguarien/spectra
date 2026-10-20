@@ -50,7 +50,7 @@ struct AllSourcesView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
                 .onTapGesture { selected = artist }
-                .listRowBackground(selected == artist ? Color.accentColor.opacity(0.22) : Color.clear)
+                .selectedRow(selected == artist)
             }
         }
         .searchable(text: $filter, placement: .sidebar, prompt: "Filter artists")
@@ -69,7 +69,7 @@ struct AllSourcesView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .onTapGesture { selectedAlbum = album }
-                    .listRowBackground(selectedAlbum == album ? Color.accentColor.opacity(0.22) : Color.clear)
+                    .selectedRow(selectedAlbum == album)
                 }
                 if loadingAlbums {
                     ProgressView()

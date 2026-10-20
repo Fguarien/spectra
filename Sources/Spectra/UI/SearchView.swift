@@ -6,6 +6,7 @@ import SwiftUI
 /// albums → tracks, album → tracks), each served by the account it came from.
 struct SearchView: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject private var player = AudioPlayer.shared
 
     var body: some View {
         NavigationStack {
@@ -43,12 +44,16 @@ struct SearchView: View {
     @ViewBuilder private func hubRow(_ item: PlexMetadata, type: String) -> some View {
         if type == "track" {
             HStack {
+                if AudioPlayer.shared.current?.id == item.ratingKey {
+                    Image(systemName: "speaker.wave.2.fill").foregroundStyle(.tint)
+                }
                 Text(item.title)
                 Text("— \(item.grandparentTitle ?? "")").foregroundStyle(.secondary).font(.caption)
                 Spacer()
                 OfflineBadge(ratingKey: item.ratingKey)
                 Text(durationText(item.duration)).foregroundStyle(.secondary).font(.callout)
             }
+            .selectedRow(player.current?.id == item.ratingKey)
             .contentShape(Rectangle())
             .onTapGesture { model.play([item], startAt: 0,
                                        albumTitle: item.parentTitle ?? "", artist: item.grandparentTitle ?? "") }

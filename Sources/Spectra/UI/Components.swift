@@ -156,3 +156,31 @@ struct HeartButton: View {
         .help(liked ? "Unlove" : "Love — grows the Radio ♥ playlist")
     }
 }
+
+/// Visible selection drawn INSIDE the row. `.listRowBackground` is ignored by
+/// macOS in sidebar-style lists (every NavigationSplitView column), so the
+/// previous 22 % tint never showed: users couldn't tell what was selected.
+struct SelectedRow: ViewModifier {
+    @ObservedObject private var theme = ThemeManager.shared
+    let isSelected: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.vertical, 3).padding(.horizontal, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? theme.accent.color.opacity(0.30) : .clear)
+            )
+            .overlay(alignment: .leading) {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 1.5).fill(theme.accent.color)
+                        .frame(width: 3).padding(.vertical, 3)
+                }
+            }
+            .fontWeight(isSelected ? .semibold : nil)
+    }
+}
+
+extension View {
+    func selectedRow(_ isSelected: Bool) -> some View { modifier(SelectedRow(isSelected: isSelected)) }
+}

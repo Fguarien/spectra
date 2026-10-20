@@ -29,7 +29,7 @@ struct LibraryView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .onTapGesture { selectedArtist = artist }
-                    .listRowBackground(selectedArtist == artist ? Color.accentColor.opacity(0.22) : Color.clear)
+                    .selectedRow(selectedArtist == artist)
             }
         }
         .navigationTitle("Artists")
@@ -43,7 +43,7 @@ struct LibraryView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                         .onTapGesture { selectedAlbum = album }
-                        .listRowBackground(selectedAlbum == album ? Color.accentColor.opacity(0.22) : Color.clear)
+                        .selectedRow(selectedAlbum == album)
                 }
                 if albums.isEmpty { Text(selectedArtist == nil ? "Select an artist" : "No albums").foregroundStyle(.secondary) }
             }
@@ -151,22 +151,36 @@ struct TrackListView: View {
 
 struct TrackRow: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject private var player = AudioPlayer.shared
+    @ObservedObject private var theme = ThemeManager.shared
     let index: Int
     let track: PlexMetadata
     let albumTitle: String
     let artist: String
 
+    /// Clicking a track plays it, so "selected" = the track playing now.
+    private var isPlaying: Bool { player.current?.id == track.ratingKey }
+
     var body: some View {
         HStack(spacing: 10) {
-            Text(track.index.map(String.init) ?? "\(index + 1)")
-                .frame(width: 26, alignment: .trailing).foregroundStyle(.secondary)
+            Group {
+                if isPlaying {
+                    Image(systemName: player.isPlaying ? "speaker.wave.2.fill" : "speaker.fill")
+                        .foregroundStyle(theme.accent.color)
+                } else {
+                    Text(track.index.map(String.init) ?? "\(index + 1)").foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 26, alignment: .trailing)
             Text(track.title).lineLimit(1)
+                .foregroundStyle(isPlaying ? AnyShapeStyle(theme.accent.color) : AnyShapeStyle(.primary))
             Spacer()
             OfflineBadge(ratingKey: track.ratingKey)
             StarRatingView(rating: currentRating, compact: true) { model.rate(track, stars: $0) }
             Text(durationText(track.duration)).foregroundStyle(.secondary).font(.callout)
                 .frame(width: 44, alignment: .trailing)
         }
+        .selectedRow(isPlaying)
     }
 
     private var currentRating: Int {

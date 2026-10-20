@@ -26,7 +26,7 @@ struct PlaylistsView: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture { selected = nil; selectedLocal = pl; loadLocal(pl) }
-                        .listRowBackground(selectedLocal?.id == pl.id ? Color.accentColor.opacity(0.22) : Color.clear)
+                        .selectedRow(selectedLocal?.id == pl.id)
                     }
                     if model.localPlaylists.isEmpty {
                         Text("Love a track (♥) to start a radio").foregroundStyle(.secondary)
@@ -44,7 +44,7 @@ struct PlaylistsView: View {
                         .overlay(alignment: .trailing) { CollectionBadge(collection: pl) }
                         .contentShape(Rectangle())
                         .onTapGesture { selectedLocal = nil; selected = pl }
-                        .listRowBackground(selected == pl ? Color.accentColor.opacity(0.22) : Color.clear)
+                        .selectedRow(selected == pl)
                     }
                     if model.playlists.isEmpty { Text("None").foregroundStyle(.secondary) }
                 }
