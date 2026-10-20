@@ -13,6 +13,7 @@ final class AppModel: ObservableObject {
     @Published var phase: Phase = .signedOut
     @Published var linkCode: String?          // shown while the user approves in-browser
     @Published var serverName = ""
+    @Published var statusLabel = "Connecting…"
     @Published var pane: Pane = .library
     @Published var artists: [PlexMetadata] = []
     @Published var playlists: [PlexMetadata] = []
@@ -162,6 +163,7 @@ final class AppModel: ObservableObject {
             return
         }
         phase = .loading
+        statusLabel = "Connecting to \(account.name)…"
         let p = ProviderFactory.make(for: account, token: token)
         Task {
             do {
@@ -171,8 +173,12 @@ final class AppModel: ObservableObject {
                 AudioPlayer.shared.onTimeline = { key, state, t, d in
                     Task { await p.reportTimeline(ratingKey: key, state: state, timeMs: t, durationMs: d) }
                 }
-                artists = (try? await p.artists()) ?? []
-                playlists = (try? await p.playlists()) ?? []
+                // Load artists and playlists concurrently (each may be a slow
+                // bridge call for YouTube Music).
+                async let a = p.artists()
+                async let pl = p.playlists()
+                artists = (try? await a) ?? []
+                playlists = (try? await pl) ?? []
                 phase = .ready
             } catch {
                 phase = .error("Could not connect to \(account.name): \(error.localizedDescription)")

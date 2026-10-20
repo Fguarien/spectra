@@ -143,10 +143,11 @@ final class YouTubeMusicProvider: MusicProvider {
 
     private func runYtDlp(_ args: [String]) async throws -> String { try await runProcess(ytdlp, args) }
 
-    /// Run a binary off the main actor, draining stdout before waiting (no pipe
-    /// deadlock on large JSON).
+    /// Run a binary off the main actor. stdout and stderr are drained
+    /// concurrently so neither pipe can fill and stall the child.
     private func runProcess(_ binary: String, _ args: [String]) async throws -> String {
         return try await Task.detached(priority: .userInitiated) {
+            final class Box { var data = Data() }
             let p = Process()
             p.executableURL = URL(fileURLWithPath: binary)
             p.arguments = args
@@ -154,10 +155,14 @@ final class YouTubeMusicProvider: MusicProvider {
             p.standardOutput = out
             p.standardError = err
             try p.run()
+            let errBox = Box()
+            let errQueue = DispatchQueue(label: "spectra.proc.err")
+            errQueue.async { errBox.data = err.fileHandleForReading.readDataToEndOfFile() }
             let data = out.fileHandleForReading.readDataToEndOfFile()
             p.waitUntilExit()
+            errQueue.sync {}   // ensure stderr fully read
             guard p.terminationStatus == 0 else {
-                let msg = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                let msg = String(data: errBox.data, encoding: .utf8) ?? ""
                 throw YTError.ytdlp(String(msg.prefix(300)))
             }
             return String(data: data, encoding: .utf8) ?? ""

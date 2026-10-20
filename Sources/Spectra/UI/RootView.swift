@@ -16,7 +16,7 @@ struct RootView: View {
         case .signedOut, .linking:
             LoginView()
         case .loading:
-            ProgressView("Connecting to Plex…").controlSize(.large)
+            ProgressView(model.statusLabel).controlSize(.large)
         case .ready:
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
