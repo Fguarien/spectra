@@ -27,6 +27,9 @@ struct RootView: View {
                 Divider()
                 NowPlayingBar()
             }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) { GlobalSearchField() }
+            }
         case .error(let message):
             VStack(spacing: 16) {
                 Image(systemName: "exclamationmark.triangle").font(.largeTitle)
@@ -39,6 +42,7 @@ struct RootView: View {
     @ViewBuilder private var paneView: some View {
         switch model.pane {
         case .library:   LibraryView()
+        case .allSources: AllSourcesView()
         case .playlists: PlaylistsView()
         case .search:    SearchView()
         case .downloads: DownloadsView()
@@ -54,6 +58,7 @@ struct Sidebar: View {
 
     private let items: [(AppModel.Pane, String, String)] = [
         (.library, "Library", "music.note.house"),
+        (.allSources, "All Sources", "square.stack.3d.up"),
         (.playlists, "Playlists", "music.note.list"),
         (.search, "Search", "magnifyingglass"),
         (.downloads, "Downloads", "arrow.down.circle"),
@@ -95,5 +100,30 @@ struct Sidebar: View {
             }
         }
         .menuStyle(.borderlessButton)
+    }
+}
+
+/// Persistent search field in the window toolbar: searches every connected
+/// account as you type (debounced) and jumps to the Search pane.
+struct GlobalSearchField: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search all sources", text: $model.searchQuery)
+                .textFieldStyle(.plain)
+                .onSubmit { model.runSearch(model.searchQuery) }
+                .onChange(of: model.searchQuery) { _, _ in model.scheduleSearch() }
+            if !model.searchQuery.isEmpty {
+                Button { model.searchQuery = ""; model.searchHits = [] } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+        .frame(width: 260)
     }
 }

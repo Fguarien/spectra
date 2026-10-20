@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var theme = ThemeManager.shared
     @AppStorage("notifyOnTrackChange") private var notifyOnTrackChange = true
+    @ObservedObject private var lastfm = LastFM.shared
 
     var body: some View {
         Form {
@@ -29,6 +30,30 @@ struct SettingsView: View {
                 Toggle("Notify on track change", isOn: $notifyOnTrackChange)
                 Text("Shows a notification with the track, artist and album when the song changes while Spectra is in the background.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Last.fm") {
+                if let user = lastfm.username {
+                    HStack {
+                        Label("Scrobbling as \(user)", systemImage: "dot.radiowaves.left.and.right")
+                        Spacer()
+                        Button("Disconnect") { lastfm.disconnect() }.buttonStyle(.borderless)
+                    }
+                } else {
+                    Button("Connect Last.fm…") { lastfm.connect() }
+                        .disabled(!lastfm.hasAPIKey)
+                    if !lastfm.hasAPIKey {
+                        Text("No Last.fm API key installed yet.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Toggle("Scrobble plays", isOn: $lastfm.enabled)
+                Toggle("Also scrobble Plex plays", isOn: $lastfm.scrobblePlex)
+                Text("Leave off if your Plex account already scrobbles to Last.fm, to avoid duplicates. A track is scrobbled after half its length or 4 minutes of listening.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if lastfm.pendingCount > 0 {
+                    Text("\(lastfm.pendingCount) scrobble(s) waiting to be sent.").font(.caption)
+                }
+                if let s = lastfm.status { Text(s).font(.caption).foregroundStyle(.orange) }
             }
 
             Section("Prism Import") {

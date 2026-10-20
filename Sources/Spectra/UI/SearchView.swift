@@ -1,49 +1,43 @@
 import SwiftUI
 
-/// Server-side search across the music library (`/hubs/search`), grouped by
-/// result type. Track rows play directly; artist and album rows drill down
-/// (artist → albums → tracks, album → tracks) so every result is reachable.
+/// Search across EVERY connected account (Plex, Local Files, YouTube Music),
+/// driven by the toolbar field. Results are grouped by provider, then by type.
+/// Track rows play directly; artist and album rows drill down (artist →
+/// albums → tracks, album → tracks), each served by the account it came from.
 struct SearchView: View {
     @EnvironmentObject var model: AppModel
-    @State private var query = ""
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                searchField
+            Group {
                 if model.searchHits.isEmpty {
-                    Spacer()
-                    Text("Type a query and press return").foregroundStyle(.secondary)
-                    Spacer()
+                    VStack(spacing: 8) {
+                        if model.searching {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "magnifyingglass").font(.largeTitle).foregroundStyle(.secondary)
+                            Text(model.searchQuery.isEmpty ? "Search all your sources from the toolbar"
+                                                           : "No results")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
-                        ForEach(Array(model.searchHits.enumerated()), id: \.offset) { _, hub in
-                            Section(hub.title ?? (hub.type ?? "Results").capitalized) {
-                                ForEach(hub.items) { item in
-                                    hubRow(item, type: hub.type ?? "")
+                        ForEach(model.searchHits) { section in
+                            Section {
+                                ForEach(section.items) { item in
+                                    hubRow(item, type: section.type)
                                 }
+                            } header: {
+                                Label("\(section.account.name) — \(section.title)",
+                                      systemImage: section.account.kind.systemImage)
                             }
                         }
                     }
                 }
             }
         }
-    }
-
-    private var searchField: some View {
-        HStack {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search artists, albums, tracks…", text: $query)
-                .textFieldStyle(.plain)
-                .onSubmit { model.runSearch(query) }
-            if !query.isEmpty {
-                Button { query = ""; model.searchHits = [] } label: { Image(systemName: "xmark.circle.fill") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
-            }
-        }
-        .padding(10)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-        .padding(16)
     }
 
     @ViewBuilder private func hubRow(_ item: PlexMetadata, type: String) -> some View {
@@ -63,7 +57,7 @@ struct SearchView: View {
                 SearchDrillView(item: item, kind: type == "artist" ? "artist" : "album")
             } label: {
                 HStack {
-                    ArtworkView(url: model.imageURL(item.thumb, size: 60), side: 32)
+                    ArtworkView(url: model.imageURL(for: item, size: 60), side: 32)
                     Text(item.title)
                     if let sub = item.parentTitle ?? item.grandparentTitle {
                         Text("— \(sub)").foregroundStyle(.secondary).font(.caption)
@@ -94,7 +88,7 @@ struct SearchDrillView: View {
                             NavigationLink {
                                 SearchDrillView(item: album, kind: "album")
                             } label: {
-                                AlbumRow(album: album, imageURL: model.imageURL(album.thumb, size: 80))
+                                AlbumRow(album: album, imageURL: model.imageURL(for: album, size: 80))
                             }
                         }
                     }

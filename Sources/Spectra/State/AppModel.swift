@@ -8,7 +8,7 @@ import AppKit
 @MainActor
 final class AppModel: ObservableObject {
     enum Phase { case signedOut, linking, loading, ready, error(String) }
-    enum Pane: Hashable { case library, playlists, search, downloads, settings }
+    enum Pane: Hashable { case library, allSources, playlists, search, downloads, settings }
 
     @Published var phase: Phase = .signedOut
     @Published var linkCode: String?          // shown while the user approves in-browser
@@ -17,7 +17,9 @@ final class AppModel: ObservableObject {
     @Published var pane: Pane = .library
     @Published var artists: [PlexMetadata] = []
     @Published var playlists: [PlexMetadata] = []
-    @Published var searchHits: [HubContainerResponse.Hub] = []
+    @Published var searchHits: [SearchSection] = []
+    @Published var searchQuery = ""
+    @Published var searching = false
     @Published var similarArtists: [PlexMetadata] = []
     @Published var importMessage: String?
 
@@ -26,12 +28,30 @@ final class AppModel: ObservableObject {
     @Published var activeAccountID: String?
 
     private(set) var provider: (any MusicProvider)?
+
+    // Every configured account stays connected in the background (E): search
+    // fans out across all of them and "All Sources" merges their artists.
+    private(set) var pool: [String: any MusicProvider] = [:]
+    @Published private(set) var poolArtists: [String: [PlexMetadata]] = [:]
+    @Published private(set) var poolStatus: [String: String] = [:]   // accountID → error text
+    @Published private(set) var mergedArtists: [MergedArtist] = []
+    private var searchTask: Task<Void, Never>?
+    private var poolConnected: Set<String> = []
     private let auth = PlexAuth()
     private let legacyTokenAccount = "plex.account.token"   // pre-multi-account key
 
     func bootstrap() {
         TrackNotifier.shared.requestAuthIfNeeded()
+        LastFM.shared.start()
         AudioPlayer.shared.onTrackChange = { track in TrackNotifier.shared.notify(track) }
+        // Report playback to whichever provider serves the current track.
+        AudioPlayer.shared.onTimeline = { [weak self] key, state, t, d in
+            guard let self else { return }
+            let cur = AudioPlayer.shared.current
+            let p = (cur?.id == key ? cur?.sourceAccountID : nil).flatMap { self.pool[$0] } ?? self.provider
+            guard let p else { return }
+            Task { await p.reportTimeline(ratingKey: key, state: state, timeMs: t, durationMs: d) }
+        }
 
         AccountStore.shared.migrateLegacyIfNeeded(legacyAccount: legacyTokenAccount)
         refreshAccounts()
@@ -129,8 +149,8 @@ final class AppModel: ObservableObject {
     func removeAccount(_ id: String) {
         let wasActive = (id == activeAccountID)
         AccountStore.shared.remove(id)   // also repoints activeID if needed
+        dropFromPool(id)
         if wasActive {
-            AudioPlayer.shared.onTimeline = nil
             provider = nil
             artists = []; playlists = []; searchHits = []; similarArtists = []; serverName = ""
         }
@@ -143,8 +163,7 @@ final class AppModel: ObservableObject {
 
     /// Remove the active account; switch to another if one remains, else sign out.
     func signOut() {
-        if let id = activeAccountID { AccountStore.shared.remove(id) }
-        AudioPlayer.shared.onTimeline = nil
+        if let id = activeAccountID { AccountStore.shared.remove(id); dropFromPool(id) }
         provider = nil
         artists = []; playlists = []; searchHits = []; similarArtists = []; serverName = ""
         refreshAccounts()
@@ -164,49 +183,144 @@ final class AppModel: ObservableObject {
         }
         phase = .loading
         statusLabel = "Connecting to \(account.name)…"
-        let p = ProviderFactory.make(for: account, token: token)
+        let id = account.id
+        let p = pool[id] ?? ProviderFactory.make(for: account, token: token)
         Task {
             do {
-                try await p.connect()
+                if !poolConnected.contains(id) { try await p.connect(); poolConnected.insert(id) }
+                pool[id] = p
+                poolStatus[id] = nil
                 provider = p
                 serverName = p.displayName.isEmpty ? account.name : p.displayName
-                AudioPlayer.shared.onTimeline = { key, state, t, d in
-                    Task { await p.reportTimeline(ratingKey: key, state: state, timeMs: t, durationMs: d) }
-                }
                 // Load artists and playlists concurrently (each may be a slow
                 // bridge call for YouTube Music).
                 async let a = p.artists()
                 async let pl = p.playlists()
-                artists = (try? await a) ?? []
-                playlists = (try? await pl) ?? []
+                artists = tag((try? await a) ?? [], id)
+                playlists = tag((try? await pl) ?? [], id)
+                setPoolArtists(id, artists)
                 phase = .ready
+                connectPool()
             } catch {
                 phase = .error("Could not connect to \(account.name): \(error.localizedDescription)")
             }
         }
     }
 
+    /// Connect every other account in the background. A failing account is
+    /// recorded in `poolStatus` and never blocks the active one.
+    private func connectPool() {
+        for account in accounts where pool[account.id] == nil && account.id != activeAccountID {
+            guard let token = AccountStore.shared.token(for: account.id) else { continue }
+            let p = ProviderFactory.make(for: account, token: token)
+            let id = account.id
+            pool[id] = p   // reserve the slot so a second call doesn't reconnect
+            Task {
+                do {
+                    try await p.connect()
+                    poolConnected.insert(id)
+                    let a = tag(try await p.artists(), id)
+                    setPoolArtists(id, a)
+                } catch {
+                    pool[id] = nil   // retried on the next connect
+                    poolStatus[id] = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func dropFromPool(_ id: String) {
+        pool[id] = nil
+        poolConnected.remove(id)
+        poolStatus[id] = nil
+        setPoolArtists(id, nil)
+    }
+
+    private func setPoolArtists(_ id: String, _ list: [PlexMetadata]?) {
+        poolArtists[id] = list
+        mergedArtists = MergedArtist.merge(poolArtists, order: accounts.map(\.id))
+    }
+
+    private func tag(_ list: [PlexMetadata], _ id: String?) -> [PlexMetadata] {
+        list.map { $0.tagged(id) }
+    }
+
+    /// The provider that owns a row: its source account, else the active one.
+    func provider(for m: PlexMetadata) -> (any MusicProvider)? {
+        if let id = m.sourceAccountID, let p = pool[id] { return p }
+        return provider
+    }
+
+    func account(for m: PlexMetadata) -> Account? {
+        let id = m.sourceAccountID ?? activeAccountID
+        return accounts.first { $0.id == id }
+    }
+
     // MARK: browse
 
     func albums(of artist: PlexMetadata) async -> [PlexMetadata] {
-        (try? await provider?.albums(of: artist)) ?? []
+        let src = artist.sourceAccountID ?? activeAccountID
+        return tag((try? await provider(for: artist)?.albums(of: artist)) ?? [], src)
     }
 
     func tracks(of album: PlexMetadata) async -> [PlexMetadata] {
-        (try? await provider?.tracks(of: album)) ?? []
+        let src = album.sourceAccountID ?? activeAccountID
+        return tag((try? await provider(for: album)?.tracks(of: album)) ?? [], src)
     }
 
-    // MARK: search
+    // MARK: search — fan-out across every connected account
+
+    /// Debounced search as the user types in the toolbar field.
+    func scheduleSearch() {
+        searchTask?.cancel()
+        let q = searchQuery
+        searchTask = Task {
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            await performSearch(q)
+        }
+    }
 
     func runSearch(_ query: String) {
-        Task { searchHits = (try? await provider?.search(query)) ?? [] }
+        searchTask?.cancel()
+        searchTask = Task { await performSearch(query) }
+    }
+
+    private func performSearch(_ raw: String) async {
+        let q = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { searchHits = []; searching = false; return }
+        if pane != .search { pane = .search }
+        searching = true
+        let targets: [(Int, Account, any MusicProvider)] = accounts.enumerated().compactMap { i, acc in
+            pool[acc.id].map { (i, acc, $0) }
+        }
+        var bucket: [(Int, [SearchSection])] = []
+        await withTaskGroup(of: (Int, [SearchSection]).self) { group in
+            for (i, acc, p) in targets {
+                group.addTask {
+                    let hubs = (try? await p.search(q)) ?? []
+                    let sections = hubs.compactMap { hub -> SearchSection? in
+                        let items = hub.items.map { $0.tagged(acc.id) }
+                        guard !items.isEmpty else { return nil }
+                        return SearchSection(account: acc, title: hub.title ?? (hub.type ?? "Results").capitalized,
+                                             type: hub.type ?? "", items: items)
+                    }
+                    return (i, sections)
+                }
+            }
+            for await r in group { bucket.append(r) }
+        }
+        guard !Task.isCancelled else { return }
+        searchHits = bucket.sorted { $0.0 < $1.0 }.flatMap(\.1)
+        searching = false
     }
 
     // MARK: similar artists
 
     func loadSimilar(for artist: PlexMetadata) {
         Task {
-            var hits = (try? await provider?.relatedArtists(ratingKey: artist.ratingKey)) ?? []
+            let src = artist.sourceAccountID ?? activeAccountID
+            var hits = tag((try? await provider(for: artist)?.relatedArtists(ratingKey: artist.ratingKey)) ?? [], src)
             if hits.isEmpty {
                 let similarNames = similarFromImport(artist.title)
                 hits = artists.filter { similarNames.contains($0.title) }
@@ -225,22 +339,29 @@ final class AppModel: ObservableObject {
     // MARK: playlists
 
     func reloadPlaylists() {
-        Task { playlists = (try? await provider?.playlists()) ?? [] }
+        let id = activeAccountID
+        Task { playlists = tag((try? await provider?.playlists()) ?? [], id) }
     }
 
     func playlistTracks(_ playlist: PlexMetadata) async -> [PlexMetadata] {
-        (try? await provider?.playlistItems(id: playlist.ratingKey)) ?? []
+        tag((try? await provider(for: playlist)?.playlistItems(id: playlist.ratingKey)) ?? [],
+            playlist.sourceAccountID ?? activeAccountID)
     }
 
     func createPlaylist(title: String, from tracks: [PlexMetadata]) {
         Task {
-            try? await provider?.createPlaylist(title: title, trackRatingKeys: tracks.map(\.ratingKey))
+            try? await provider?.createPlaylist(title: title, trackRatingKeys: activeKeys(tracks))
             reloadPlaylists()
         }
     }
 
     func addToPlaylist(_ playlist: PlexMetadata, tracks: [PlexMetadata]) {
-        Task { try? await provider?.addToPlaylist(id: playlist.ratingKey, trackRatingKeys: tracks.map(\.ratingKey)) }
+        Task { try? await provider?.addToPlaylist(id: playlist.ratingKey, trackRatingKeys: activeKeys(tracks)) }
+    }
+
+    /// Rating keys of the tracks that belong to the active account.
+    private func activeKeys(_ tracks: [PlexMetadata]) -> [String] {
+        tracks.filter { $0.sourceAccountID == nil || $0.sourceAccountID == activeAccountID }.map(\.ratingKey)
     }
 
     func recreatePrismPlaylist(named name: String) {
@@ -268,14 +389,16 @@ final class AppModel: ObservableObject {
     func rate(_ track: PlexMetadata, stars: Int) {
         AppDatabase.shared.setRating(stars, ratingKey: track.ratingKey, title: track.title, artist: track.grandparentTitle)
         AudioPlayer.shared.setCurrentRating(stars)
-        Task { try? await provider?.rate(ratingKey: track.ratingKey, stars: stars) }
+        let p = provider(for: track)
+        Task { try? await p?.rate(ratingKey: track.ratingKey, stars: stars) }
     }
 
     func rateCurrent(stars: Int) {
         guard let t = AudioPlayer.shared.current else { return }
         AppDatabase.shared.setRating(stars, ratingKey: t.id, title: t.title, artist: t.artist)
         AudioPlayer.shared.setCurrentRating(stars)
-        Task { try? await provider?.rate(ratingKey: t.id, stars: stars) }
+        let p = t.sourceAccountID.flatMap { pool[$0] } ?? provider
+        Task { try? await p?.rate(ratingKey: t.id, stars: stars) }
     }
 
     func rating(_ ratingKey: String) -> Int? { AppDatabase.shared.rating(forRatingKey: ratingKey) }
@@ -283,7 +406,7 @@ final class AppModel: ObservableObject {
     // MARK: downloads
 
     func download(_ m: PlexMetadata) {
-        guard let url = provider?.downloadURL(for: m) else { return }
+        guard let url = provider(for: m)?.downloadURL(for: m) else { return }
         DownloadManager.shared.download(ratingKey: m.ratingKey, from: url, title: m.title,
                                         artist: m.grandparentTitle, durationMs: m.duration ?? 0, codec: m.codec)
     }
@@ -298,14 +421,16 @@ final class AppModel: ObservableObject {
             album: albumTitle.isEmpty ? (m.parentTitle ?? "") : albumTitle,
             url: url,
             durationMs: m.duration ?? 0,
-            artworkURL: provider?.artworkURL(m.thumb, size: 300),
-            userRating: rating(m.ratingKey) ?? m.userRating.map { Int($0 / 2) }
+            artworkURL: provider(for: m)?.artworkURL(m.thumb, size: 300),
+            userRating: rating(m.ratingKey) ?? m.userRating.map { Int($0 / 2) },
+            sourceAccountID: m.sourceAccountID ?? activeAccountID,
+            sourceKind: account(for: m)?.kind
         )
     }
 
     /// Synchronous resolution (Plex, Local Files): a direct/local URL.
     func playable(_ m: PlexMetadata, albumTitle: String, artist: String) -> PlayableTrack? {
-        let url: URL? = DownloadManager.shared.localURL(m.ratingKey) ?? provider?.playableURL(for: m)
+        let url: URL? = DownloadManager.shared.localURL(m.ratingKey) ?? provider(for: m)?.playableURL(for: m)
         guard let url else { return nil }
         return makePlayable(m, url: url, albumTitle: albumTitle, artist: artist)
     }
@@ -316,14 +441,14 @@ final class AppModel: ObservableObject {
         if let local = DownloadManager.shared.localURL(m.ratingKey) {
             return makePlayable(m, url: local, albumTitle: albumTitle, artist: artist)
         }
-        guard let url = await provider?.resolveStreamURL(for: m) else { return nil }
+        guard let url = await provider(for: m)?.resolveStreamURL(for: m) else { return nil }
         return makePlayable(m, url: url, albumTitle: albumTitle, artist: artist)
     }
 
     func play(_ list: [PlexMetadata], startAt index: Int, albumTitle: String = "", artist: String = "") {
         guard !list.isEmpty else { return }
         let start = min(max(index, 0), list.count - 1)
-        if provider?.capabilities.resolvesStreamLazily == true {
+        if provider(for: list[start])?.capabilities.resolvesStreamLazily == true {
             // Each URL is a network call: play the chosen track first (instant
             // start), then resolve the rest from there and append in order.
             let slice = Array(list[start...])
@@ -356,10 +481,15 @@ final class AppModel: ObservableObject {
         provider?.artworkURL(thumb, size: size)
     }
 
+    /// Artwork drawn by the provider that owns the row.
+    func imageURL(for m: PlexMetadata, size: Int = 300) -> URL? {
+        provider(for: m)?.artworkURL(m.thumb, size: size)
+    }
+
     /// Square cover from the web (iTunes, no key) for a local album that has no
     /// embedded/folder artwork. Returns nil for other providers or junk names.
     func remoteCover(for item: PlexMetadata) async -> URL? {
-        guard provider?.kind == .local, item.type == "album" else { return nil }
+        guard provider(for: item)?.kind == .local, item.type == "album" else { return nil }
         let artist = item.grandparentTitle ?? item.parentTitle ?? ""
         guard !artist.isEmpty, !["Singles", "Unknown Album"].contains(item.title) else { return nil }
         return await ArtworkCache.shared.remoteCover(artist: artist, title: item.title, isAlbum: true)
@@ -397,5 +527,44 @@ final class AppModel: ObservableObject {
                 await MainActor.run { self.importMessage = "Import failed: \(error.localizedDescription)" }
             }
         }
+    }
+}
+
+/// One provider's slice of a search result (e.g. "YouTube Music — Songs").
+struct SearchSection: Identifiable {
+    let account: Account
+    let title: String
+    let type: String          // "track", "album", "artist", "playlist"…
+    let items: [PlexMetadata]
+    var id: String { "\(account.id)|\(type)|\(title)" }
+}
+
+/// An artist as it appears across every account, merged by normalised name.
+struct MergedArtist: Identifiable, Hashable {
+    let key: String
+    let name: String
+    let members: [PlexMetadata]   // one row per account that has the artist
+    var id: String { key }
+
+    static func normalise(_ name: String) -> String {
+        var n = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if n.hasPrefix("the ") { n.removeFirst(4) }
+        return n.components(separatedBy: .whitespaces).filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    static func merge(_ pool: [String: [PlexMetadata]], order: [String]) -> [MergedArtist] {
+        var byKey: [String: [PlexMetadata]] = [:]
+        var display: [String: String] = [:]
+        for id in order {
+            for a in pool[id] ?? [] {
+                let k = normalise(a.title)
+                guard !k.isEmpty else { continue }
+                byKey[k, default: []].append(a)
+                if display[k] == nil { display[k] = a.title }
+            }
+        }
+        return byKey.map { MergedArtist(key: $0.key, name: display[$0.key] ?? $0.key, members: $0.value) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 }

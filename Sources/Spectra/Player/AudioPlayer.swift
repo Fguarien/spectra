@@ -15,6 +15,8 @@ struct PlayableTrack: Identifiable, Equatable {
     let durationMs: Int
     let artworkURL: URL?
     var userRating: Int? = nil   // 0…5, mirrored for the transport bar
+    var sourceAccountID: String? = nil   // account whose provider serves it
+    var sourceKind: ProviderKind? = nil  // nil = offline download
 
     static func == (l: PlayableTrack, r: PlayableTrack) -> Bool { l.id == r.id && l.url == r.url }
 }

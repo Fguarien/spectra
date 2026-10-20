@@ -73,6 +73,10 @@ struct PlexMetadata: Decodable {
     let year: Int?
     let leafCount: Int?         // playlist/album track count
     let Media: [PlexMedia]?
+    /// Account this row came from (set by AppModel, never decoded). Lets a
+    /// result from a non-active account be browsed, played and drawn by the
+    /// provider it belongs to — cross-provider search and "All Sources".
+    var sourceAccountID: String? = nil
 
     /// First playable part key, e.g. "/library/parts/17224/.../file.flac".
     var firstPartKey: String? { Media?.first?.Part.first?.key }
@@ -85,9 +89,17 @@ struct PlexMetadata: Decodable {
 }
 
 extension PlexMetadata: Hashable, Identifiable {
-    var id: String { ratingKey }
-    static func == (l: PlexMetadata, r: PlexMetadata) -> Bool { l.ratingKey == r.ratingKey }
-    func hash(into h: inout Hasher) { h.combine(ratingKey) }
+    /// Unique across accounts: two providers may reuse the same ratingKey.
+    var id: String { "\(sourceAccountID ?? "")|\(ratingKey)" }
+    static func == (l: PlexMetadata, r: PlexMetadata) -> Bool {
+        l.ratingKey == r.ratingKey && l.sourceAccountID == r.sourceAccountID
+    }
+    func hash(into h: inout Hasher) { h.combine(ratingKey); h.combine(sourceAccountID) }
+
+    /// Copy stamped with the account it came from.
+    func tagged(_ accountID: String?) -> PlexMetadata {
+        var c = self; c.sourceAccountID = accountID; return c
+    }
 }
 
 struct PlexMedia: Decodable {

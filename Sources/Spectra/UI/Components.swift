@@ -43,7 +43,7 @@ struct AlbumArtwork: View {
     let side: CGFloat
     @State private var remote: URL?
 
-    private var localURL: URL? { model.imageURL(item.thumb, size: Int(side * 3)) }
+    private var localURL: URL? { model.imageURL(for: item, size: Int(side * 3)) }
 
     var body: some View {
         ArtworkView(url: localURL ?? remote, side: side)

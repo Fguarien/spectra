@@ -39,7 +39,7 @@ struct LibraryView: View {
         List {
             Section("Albums") {
                 ForEach(albums) { album in
-                    AlbumRow(album: album, imageURL: model.imageURL(album.thumb, size: 80))
+                    AlbumRow(album: album, imageURL: model.imageURL(for: album, size: 80))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                         .onTapGesture { selectedAlbum = album }
