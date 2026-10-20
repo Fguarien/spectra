@@ -45,16 +45,8 @@ struct TrackMenu: View {
 
     var body: some View {
         Button("Play") { model.play([track], startAt: 0, albumTitle: albumTitle, artist: artist) }
-        Button("Play Next") {
-            if let p = model.playable(track, albumTitle: albumTitle, artist: artist) {
-                AudioPlayer.shared.playNext(p)
-            }
-        }
-        Button("Add to Queue") {
-            if let p = model.playable(track, albumTitle: albumTitle, artist: artist) {
-                AudioPlayer.shared.append(p)
-            }
-        }
+        Button("Play Next") { model.enqueue(track, albumTitle: albumTitle, artist: artist, playNext: true) }
+        Button("Add to Queue") { model.enqueue(track, albumTitle: albumTitle, artist: artist, playNext: false) }
         Divider()
         Menu("Rate") {
             ForEach(0...5, id: \.self) { n in

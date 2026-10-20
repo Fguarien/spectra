@@ -81,6 +81,16 @@ final class AppModel: ObservableObject {
         addLocalAccount(path: url.path)
     }
 
+    /// Add an anonymous YouTube Music account (search + play). Personal library
+    /// via cookies is a later increment; the token is empty for now.
+    func addYouTubeMusicAccount() {
+        let account = Account(id: UUID().uuidString, kind: .youtubeMusic, name: "YouTube Music")
+        AccountStore.shared.add(account, token: "")
+        AccountStore.shared.activeID = account.id
+        refreshAccounts()
+        connect(account: account)
+    }
+
     func addLocalAccount(path: String) {
         let name = URL(fileURLWithPath: path).lastPathComponent
         let account = Account(id: UUID().uuidString, kind: .local, name: name.isEmpty ? "Local" : name)
@@ -241,10 +251,8 @@ final class AppModel: ObservableObject {
 
     // MARK: playable resolution (local → provider)
 
-    func playable(_ m: PlexMetadata, albumTitle: String, artist: String) -> PlayableTrack? {
-        let url: URL? = DownloadManager.shared.localURL(m.ratingKey) ?? provider?.playableURL(for: m)
-        guard let url else { return nil }
-        return PlayableTrack(
+    private func makePlayable(_ m: PlexMetadata, url: URL, albumTitle: String, artist: String) -> PlayableTrack {
+        PlayableTrack(
             id: m.ratingKey,
             title: m.title,
             artist: artist.isEmpty ? (m.grandparentTitle ?? "") : artist,
@@ -256,10 +264,53 @@ final class AppModel: ObservableObject {
         )
     }
 
+    /// Synchronous resolution (Plex, Local Files): a direct/local URL.
+    func playable(_ m: PlexMetadata, albumTitle: String, artist: String) -> PlayableTrack? {
+        let url: URL? = DownloadManager.shared.localURL(m.ratingKey) ?? provider?.playableURL(for: m)
+        guard let url else { return nil }
+        return makePlayable(m, url: url, albumTitle: albumTitle, artist: artist)
+    }
+
+    /// Async resolution (streaming providers like YouTube Music): a network
+    /// round-trip for the stream URL, falling back to a local download.
+    func resolvedPlayable(_ m: PlexMetadata, albumTitle: String, artist: String) async -> PlayableTrack? {
+        if let local = DownloadManager.shared.localURL(m.ratingKey) {
+            return makePlayable(m, url: local, albumTitle: albumTitle, artist: artist)
+        }
+        guard let url = await provider?.resolveStreamURL(for: m) else { return nil }
+        return makePlayable(m, url: url, albumTitle: albumTitle, artist: artist)
+    }
+
     func play(_ list: [PlexMetadata], startAt index: Int, albumTitle: String = "", artist: String = "") {
-        let playables = list.compactMap { playable($0, albumTitle: albumTitle, artist: artist) }
-        guard !playables.isEmpty else { return }
-        AudioPlayer.shared.play(tracks: playables, startAt: min(index, playables.count - 1))
+        guard !list.isEmpty else { return }
+        let start = min(max(index, 0), list.count - 1)
+        if provider?.capabilities.resolvesStreamLazily == true {
+            // Each URL is a network call: play the chosen track first (instant
+            // start), then resolve the rest from there and append in order.
+            let slice = Array(list[start...])
+            Task {
+                guard let head = await resolvedPlayable(slice[0], albumTitle: albumTitle, artist: artist) else { return }
+                AudioPlayer.shared.play(tracks: [head], startAt: 0)
+                for m in slice.dropFirst() {
+                    if let p = await resolvedPlayable(m, albumTitle: albumTitle, artist: artist) {
+                        AudioPlayer.shared.append(p)
+                    }
+                }
+            }
+        } else {
+            let playables = list.compactMap { playable($0, albumTitle: albumTitle, artist: artist) }
+            guard !playables.isEmpty else { return }
+            AudioPlayer.shared.play(tracks: playables, startAt: min(start, playables.count - 1))
+        }
+    }
+
+    /// Queue a single track (next or at the end), resolving the URL async so it
+    /// works for every provider, streaming ones included.
+    func enqueue(_ m: PlexMetadata, albumTitle: String, artist: String, playNext: Bool) {
+        Task {
+            guard let p = await resolvedPlayable(m, albumTitle: albumTitle, artist: artist) else { return }
+            if playNext { AudioPlayer.shared.playNext(p) } else { AudioPlayer.shared.append(p) }
+        }
     }
 
     func imageURL(_ thumb: String?, size: Int = 300) -> URL? {

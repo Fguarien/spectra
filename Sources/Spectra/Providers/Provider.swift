@@ -23,8 +23,8 @@ enum ProviderKind: String, Codable, Hashable, CaseIterable {
         }
     }
 
-    /// Plex and Local Files are wired up; YouTube Music is reserved for phase C.
-    var isImplemented: Bool { self == .plex || self == .local }
+    /// All three providers are wired up (Plex, Local Files, YouTube Music).
+    var isImplemented: Bool { true }
 }
 
 /// What a provider can do, so the UI can hide actions a source doesn't support.
@@ -34,6 +34,9 @@ struct ProviderCapabilities {
     var canEditPlaylists = false
     var canSearch = false
     var canHaveSimilar = false
+    /// The stream URL must be resolved asynchronously at play time (a network
+    /// round-trip, e.g. yt-dlp for YouTube Music) rather than built synchronously.
+    var resolvesStreamLazily = false
 }
 
 protocol MusicProvider: AnyObject {
@@ -51,8 +54,12 @@ protocol MusicProvider: AnyObject {
     func search(_ query: String) async throws -> [HubContainerResponse.Hub]
     func relatedArtists(ratingKey: String) async throws -> [PlexMetadata]
 
-    /// Best playback URL for a track (native stream or a transcode).
+    /// Best playback URL for a track (native stream or a transcode). Synchronous
+    /// for providers that can build the URL directly (Plex, Local Files).
     func playableURL(for m: PlexMetadata) -> URL?
+    /// Resolve the real stream URL, possibly via a network call (streaming
+    /// providers). Defaults to the synchronous `playableURL`.
+    func resolveStreamURL(for m: PlexMetadata) async -> URL?
     /// Original-quality URL for offline download (nil if not downloadable).
     func downloadURL(for m: PlexMetadata) -> URL?
     func artworkURL(_ thumb: String?, size: Int) -> URL?
@@ -63,6 +70,10 @@ protocol MusicProvider: AnyObject {
     func createPlaylist(title: String, trackRatingKeys: [String]) async throws
     func addToPlaylist(id: String, trackRatingKeys: [String]) async throws
     func deletePlaylist(id: String) async throws
+}
+
+extension MusicProvider {
+    func resolveStreamURL(for m: PlexMetadata) async -> URL? { playableURL(for: m) }
 }
 
 enum ProviderError: LocalizedError {
@@ -79,7 +90,7 @@ enum ProviderFactory {
         switch account.kind {
         case .plex: return PlexProvider(token: token)
         case .local: return LocalFilesProvider(rootPath: token)   // token = folder path
-        case .youtubeMusic: return UnimplementedProvider(kind: account.kind)
+        case .youtubeMusic: return YouTubeMusicProvider(cookiesPath: token.isEmpty ? nil : token)
         }
     }
 }
