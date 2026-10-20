@@ -55,6 +55,9 @@ struct PlaylistsView: View {
                     Spacer()
                     Button { model.play(tracks, startAt: 0) } label: { Label("Play", systemImage: "play.fill") }
                         .disabled(tracks.isEmpty)
+                    Button { model.downloadAll(tracks) } label: { Label("Download", systemImage: "arrow.down.circle") }
+                        .disabled(tracks.isEmpty)
+                        .help("Download every track to the NAS")
                     Button(role: .destructive) {
                         model.deletePlaylist(pl); selected = nil; tracks = []
                     } label: { Label("Delete", systemImage: "trash") }

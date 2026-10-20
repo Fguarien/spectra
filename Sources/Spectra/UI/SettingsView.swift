@@ -32,6 +32,19 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            Section("Storage (NAS)") {
+                LabeledContent("Folder", value: Storage.root.path)
+                LabeledContent("Status", value: Storage.isAvailable ? "Mounted" : "Not mounted — downloads wait")
+                Text("Downloads go to Music/<Artist>/<Album>/ with a cover.jpg; cover art cache and database backups live here too. The live database stays on this Mac (SQLite over SMB can corrupt); a consistent copy is saved hourly and on quit, 48 kept.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Button("Back Up Now") { model.backupNow() }
+                    Button("Restore from Backup…") { model.promptRestore() }
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+                if let msg = model.backupMessage { Text(msg).font(.caption).foregroundStyle(.secondary) }
+            }
+
             Section("Last.fm") {
                 if let user = lastfm.username {
                     HStack {

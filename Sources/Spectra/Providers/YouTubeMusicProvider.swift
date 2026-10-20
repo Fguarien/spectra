@@ -97,8 +97,14 @@ final class YouTubeMusicProvider: MusicProvider {
     /// googlevideo wants yt-dlp's chunked range requests. Let yt-dlp write it.
     func downloadFile(for m: PlexMetadata, to dest: URL) async throws {
         guard let id = Self.strip(m.ratingKey, "yt:") else { throw YTError.ytdlp("not a track") }
-        _ = try await runYtDlp(["-q", "--no-warnings", "--no-part", "--force-overwrites",
-                                "-f", "140/bestaudio[ext=m4a]/bestaudio", "-o", dest.path, id])
+        var args = ["-q", "--no-warnings", "--no-part", "--force-overwrites",
+                    "-f", "140/bestaudio[ext=m4a]/bestaudio", "-o", dest.path]
+        // Tags + embedded cover need ffmpeg (present in /usr/local/bin on the Mac).
+        if let ff = ["/usr/local/bin/ffmpeg", "/opt/homebrew/bin/ffmpeg"]
+            .first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+            args += ["--embed-metadata", "--embed-thumbnail", "--ffmpeg-location", ff]
+        }
+        _ = try await runYtDlp(args + [id])
     }
     /// ytmusicapi thumbs are googleusercontent URLs sized by a `=wN-hN` suffix:
     /// ask for the size the view needs instead of the 60–120 px default.

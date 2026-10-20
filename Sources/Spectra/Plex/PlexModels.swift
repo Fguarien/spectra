@@ -56,7 +56,7 @@ struct PlexSection: Decodable {
 /// One row of a /library/... listing. Fields are optional because the same
 /// envelope is reused for artists (type 8), albums (9), tracks (10) and
 /// playlists.
-struct PlexMetadata: Decodable {
+struct PlexMetadata: Codable {
     let ratingKey: String
     let key: String?
     let title: String
@@ -102,12 +102,12 @@ extension PlexMetadata: Hashable, Identifiable {
     }
 }
 
-struct PlexMedia: Decodable {
+struct PlexMedia: Codable {
     let audioCodec: String?
     let Part: [PlexPart]
 }
 
-struct PlexPart: Decodable {
+struct PlexPart: Codable {
     let key: String
     let container: String?
 }

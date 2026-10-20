@@ -115,17 +115,53 @@ final class AppDatabase {
         return (p ?? nil).flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil }
     }
 
-    func setLocalPath(_ path: String?, ratingKey: String, title: String?, artist: String?, durationMs: Int, codec: String?) {
+    func setLocalPath(_ path: String?, ratingKey: String, title: String?, artist: String?,
+                      album: String? = nil, durationMs: Int, codec: String?) {
         try? dbQueue.write { db in
             let n = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM track WHERE ratingKey = ?", arguments: [ratingKey]) ?? 0
             if n > 0 {
-                try db.execute(sql: "UPDATE track SET localPath = ? WHERE ratingKey = ?", arguments: [path, ratingKey])
+                try db.execute(sql: "UPDATE track SET localPath = ?, albumTitle = COALESCE(?, albumTitle) WHERE ratingKey = ?",
+                               arguments: [path, album, ratingKey])
             } else {
                 try db.execute(
-                    sql: "INSERT INTO track (ratingKey, trackTitle, artistName, trackNumber, durationMs, codec, playCount, localPath) VALUES (?,?,?,0,?,?,0,?)",
-                    arguments: [ratingKey, title, artist, durationMs, codec, path])
+                    sql: "INSERT INTO track (ratingKey, trackTitle, artistName, albumTitle, trackNumber, durationMs, codec, playCount, localPath) VALUES (?,?,?,?,0,?,?,0,?)",
+                    arguments: [ratingKey, title, artist, album, durationMs, codec, path])
             }
         }
+    }
+
+    // MARK: backups on the NAS (the live DB stays local: SQLite over SMB corrupts)
+
+    /// Consistent snapshot (SQLite backup API) written locally first, then
+    /// copied to `Storage/Backup`. Keeps the newest `keep` copies.
+    @discardableResult
+    func backupToNAS(keep: Int = 48) throws -> URL? {
+        guard let dir = Storage.dir("Backup") else { return nil }
+        let stamp = DateFormatter.backupStamp.string(from: Date())
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("spectra-\(stamp).sqlite")
+        try? FileManager.default.removeItem(at: tmp)
+        let snapshot = try DatabaseQueue(path: tmp.path)
+        try dbQueue.backup(to: snapshot)
+        try snapshot.close()
+        let dest = dir.appendingPathComponent("spectra-\(stamp).sqlite")
+        try? FileManager.default.removeItem(at: dest)
+        try FileManager.default.copyItem(at: tmp, to: dest)
+        try? FileManager.default.removeItem(at: tmp)
+        let all = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+            .filter { $0.hasPrefix("spectra-") && $0.hasSuffix(".sqlite") }.sorted()
+        for old in all.dropLast(keep) { try? FileManager.default.removeItem(at: dir.appendingPathComponent(old)) }
+        return dest
+    }
+
+    /// Replace the live database with a backup, in place (no restart needed).
+    func restore(from url: URL) throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("spectra-restore.sqlite")
+        try? FileManager.default.removeItem(at: tmp)
+        try FileManager.default.copyItem(at: url, to: tmp)
+        let source = try DatabaseQueue(path: tmp.path)
+        try source.backup(to: dbQueue)
+        try source.close()
+        try? FileManager.default.removeItem(at: tmp)
     }
 
     func downloadedKeys() -> Set<String> {
@@ -152,4 +188,10 @@ final class AppDatabase {
             try String.fetchAll(db, sql: "SELECT DISTINCT name FROM prismPlaylist ORDER BY name")
         }) ?? []
     }
+}
+
+extension DateFormatter {
+    static let backupStamp: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmm"; f.locale = Locale(identifier: "en_US_POSIX"); return f
+    }()
 }

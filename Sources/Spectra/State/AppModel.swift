@@ -43,6 +43,9 @@ final class AppModel: ObservableObject {
     func bootstrap() {
         TrackNotifier.shared.requestAuthIfNeeded()
         LastFM.shared.start()
+        DownloadManager.shared.resume = { [weak self] m in self?.download(m) ?? false }
+        DownloadManager.shared.migrateLegacyDownloads()
+        startBackups()
         AudioPlayer.shared.onTrackChange = { track in TrackNotifier.shared.notify(track) }
         // Report playback to whichever provider serves the current track.
         AudioPlayer.shared.onTimeline = { [weak self] key, state, t, d in
@@ -405,20 +408,32 @@ final class AppModel: ObservableObject {
 
     // MARK: downloads
 
-    func download(_ m: PlexMetadata) {
-        guard let p = provider(for: m) else { return }
+    /// Download one track onto the NAS. Parked when the share isn't mounted;
+    /// returns false when it can't be started yet (account not connected), so
+    /// a parked request stays parked.
+    @discardableResult
+    func download(_ m: PlexMetadata) -> Bool {
+        guard Storage.isAvailable else { DownloadManager.shared.park(m); return true }
+        if let id = m.sourceAccountID, pool[id] == nil || !poolConnected.contains(id) { return false }
+        guard let p = provider(for: m) else { return false }
+        let meta = DownloadManager.Meta(
+            ratingKey: m.ratingKey, title: m.title, artist: m.grandparentTitle,
+            album: m.parentTitle, index: m.index, durationMs: m.duration ?? 0,
+            ext: (m.codec ?? "m4a").replacingOccurrences(of: "/", with: ""),
+            coverURL: p.artworkURL(m.thumb, size: 1200))
         if let url = p.downloadURL(for: m) {
-            DownloadManager.shared.download(ratingKey: m.ratingKey, from: url, title: m.title,
-                                            artist: m.grandparentTitle, durationMs: m.duration ?? 0, codec: m.codec)
-            return
+            DownloadManager.shared.download(meta, from: url)
+        } else if p.capabilities.resolvesStreamLazily {
+            // No fetchable URL (googlevideo answers a plain GET with 403): the
+            // provider writes the file itself (yt-dlp, itag 140 = AAC/m4a).
+            DownloadManager.shared.download(meta) { dest in try await p.downloadFile(for: m, to: dest) }
         }
-        // Streaming providers (YouTube Music) have no fetchable URL: the
-        // provider writes the file itself (yt-dlp, itag 140 = AAC in m4a).
-        guard p.capabilities.resolvesStreamLazily else { return }
-        DownloadManager.shared.download(ratingKey: m.ratingKey, title: m.title, artist: m.grandparentTitle,
-                                        durationMs: m.duration ?? 0, codec: "m4a") { dest in
-            try await p.downloadFile(for: m, to: dest)
-        }
+        return true
+    }
+
+    /// Download every track of a playlist (two at a time).
+    func downloadAll(_ tracks: [PlexMetadata]) {
+        for t in tracks where !DownloadManager.shared.isDownloaded(t.ratingKey) { download(t) }
     }
 
     // MARK: playable resolution (local → provider)
@@ -522,6 +537,50 @@ final class AppModel: ObservableObject {
         }
         guard !playables.isEmpty else { return }
         AudioPlayer.shared.play(tracks: playables, startAt: min(index, playables.count - 1))
+    }
+
+    // MARK: database backups on the NAS
+
+    @Published var backupMessage: String?
+    private var backupTimer: Timer?
+
+    private func startBackups() {
+        backupTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.backupNow(quiet: true) }
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
+                                               object: nil, queue: .main) { _ in
+            _ = try? AppDatabase.shared.backupToNAS()
+        }
+        backupNow(quiet: true)
+    }
+
+    func backupNow(quiet: Bool = false) {
+        do {
+            if let url = try AppDatabase.shared.backupToNAS() {
+                backupMessage = "Backed up to \(url.lastPathComponent)"
+            } else if !quiet {
+                backupMessage = "NAS share not mounted — backup skipped."
+            }
+        } catch {
+            backupMessage = "Backup failed: \(error.localizedDescription)"
+        }
+    }
+
+    func promptRestore() {
+        let panel = NSOpenPanel()
+        panel.message = "Choose a Spectra backup to restore (replaces ratings, history, playlists)"
+        panel.directoryURL = Storage.root.appendingPathComponent("Backup")
+        panel.allowedContentTypes = []
+        panel.allowsOtherFileTypes = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            _ = try AppDatabase.shared.backupToNAS()   // safety copy of the current state first
+            try AppDatabase.shared.restore(from: url)
+            backupMessage = "Restored \(url.lastPathComponent)."
+        } catch {
+            backupMessage = "Restore failed: \(error.localizedDescription)"
+        }
     }
 
     // MARK: Prism import

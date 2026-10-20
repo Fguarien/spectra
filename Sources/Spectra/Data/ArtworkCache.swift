@@ -14,9 +14,25 @@ actor ArtworkCache {
     private var remoteMemo: [String: URL?] = [:]
 
     private init() {
+        // On the NAS when mounted (Storage/Artwork), else the local cache.
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        dir = caches.appendingPathComponent("Spectra/Artwork", isDirectory: true)
+        let local = caches.appendingPathComponent("Spectra/Artwork", isDirectory: true)
+        if let nas = Storage.dir("Artwork") {
+            ArtworkCache.copyMissing(from: local, to: nas)
+            dir = nas
+        } else {
+            dir = local
+        }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    /// One-off seeding of the NAS cache with covers already fetched locally.
+    private static func copyMissing(from src: URL, to dst: URL) {
+        let fm = FileManager.default
+        for name in (try? fm.contentsOfDirectory(atPath: src.path)) ?? [] {
+            let to = dst.appendingPathComponent(name)
+            if !fm.fileExists(atPath: to.path) { try? fm.copyItem(at: src.appendingPathComponent(name), to: to) }
+        }
     }
 
     private func file(_ key: String) -> URL {
