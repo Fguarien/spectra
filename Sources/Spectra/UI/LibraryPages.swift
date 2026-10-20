@@ -533,8 +533,60 @@ struct ArtistsPage: View {
     @ObservedObject private var catalog = CatalogStore.shared
     @State private var selected: CatalogArtist.ID?
     @State private var filter = ""
+    @State private var mode: ViewMode = .list
+    @State private var gridOpen: CatalogArtist.ID?
 
     var body: some View {
+        Group {
+            if mode == .grid { grid } else { split }
+        }
+        .toolbar { ToolbarItem { ViewModePicker(mode: $mode) } }
+        .onAppear {
+            mode = ViewMode(rawValue: UserDefaults.standard.string(forKey: "mode.artists") ?? "") ?? .list
+            takePending()
+        }
+        .onChange(of: mode) { _, m in UserDefaults.standard.set(m.rawValue, forKey: "mode.artists") }
+        .onChange(of: model.pane) { _, _ in takePending() }
+    }
+
+    /// Grid: round artist pictures; a click opens the artist page, with a
+    /// back button to the grid.
+    @ViewBuilder private var grid: some View {
+        if let a = catalog.artists.first(where: { $0.id == gridOpen }) {
+            VStack(alignment: .leading, spacing: 0) {
+                Button { gridOpen = nil } label: { Label("Artists", systemImage: "chevron.left") }
+                    .buttonStyle(.borderless).padding([.top, .leading], 16)
+                ArtistDetail(artist: a)
+            }
+        } else if catalog.artists.isEmpty {
+            EmptyState(text: catalog.syncing.isEmpty ? "No artists" : "Loading your library…")
+        } else {
+            ScrollView {
+                PageTitle(text: "Artists", subtitle: "\(catalog.artists.count)")
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 200), spacing: 22, alignment: .top)],
+                          alignment: .leading, spacing: 26) {
+                    ForEach(catalog.artists) { a in
+                        VStack(spacing: 8) {
+                            CoverView(url: model.coverURL(a.albums.first?.coverTrack, size: 400), radius: 0)
+                                .clipShape(Circle())
+                            Text(a.name).font(.callout.weight(.medium)).lineLimit(1)
+                            Text(a.albums.count == 1 ? "1 album" : "\(a.albums.count) albums")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture { gridOpen = a.id }
+                        .contextMenu {
+                            Button("Play") { model.play(catalog: a.albums.flatMap(\.tracks), startAt: 0) }
+                            Button("Shuffle") { model.shuffle(catalog: a.albums.flatMap(\.tracks)) }
+                        }
+                    }
+                }
+                .padding(.horizontal, 24).padding(.bottom, 24)
+            }
+        }
+    }
+
+    private var split: some View {
         HSplitView {
             VStack(spacing: 0) {
                 TextField("Filter", text: $filter)
@@ -566,8 +618,6 @@ struct ArtistsPage: View {
             }
             .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .onAppear(perform: takePending)
-        .onChange(of: model.pane) { _, _ in takePending() }
     }
 
     private var visible: [CatalogArtist] {
@@ -577,7 +627,7 @@ struct ArtistsPage: View {
 
     private func takePending() {
         if let p = Self.pending {
-            selected = MergedArtist.normalise(p); Self.pending = nil
+            selected = MergedArtist.normalise(p); gridOpen = selected; Self.pending = nil
         } else if selected == nil {
             selected = catalog.artists.first?.id
         }
@@ -818,5 +868,83 @@ struct PlaylistArtGrid: View {
                 .contextMenu { SongsMenu(tracks: [t], context: tracks) }
             }
         }
+    }
+}
+
+// MARK: - one library
+
+/// A single source (sidebar « Library » rows): its own albums and songs,
+/// not the merged view.
+struct SourcePage: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject private var catalog = CatalogStore.shared
+    let accountID: String
+    @State private var lib: CatalogStore.Built?
+    @State private var loadedFor: String?
+    @AppStorage("source.tab") private var tab = "albums"
+
+    var body: some View {
+        let name = model.accounts.first { $0.id == accountID }?.name ?? "Library"
+        Group {
+            if let lib, loadedFor == accountID {
+                if tab == "songs" {
+                    VStack(spacing: 0) {
+                        PageTitle(text: name, subtitle: "\(lib.tracks.count) songs")
+                        if lib.tracks.isEmpty {
+                            EmptyState(text: catalog.syncing.contains(accountID) ? "Loading this library…" : "No songs")
+                        } else {
+                            SongsTable(tracks: lib.tracks, key: "source",
+                                       defaultSort: [KeyPathComparator(\.title, comparator: .localizedStandard)])
+                        }
+                    }
+                } else {
+                    AlbumsPage(title: name, albums: lib.albums, modeKey: "source")
+                }
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .toolbar {
+            ToolbarItem {
+                Picker("Show", selection: $tab) {
+                    Text("Albums").tag("albums")
+                    Text("Songs").tag("songs")
+                }
+                .pickerStyle(.segmented)
+            }
+        }
+        .task(id: "\(accountID)|\(catalog.version)") {
+            let b = await catalog.library(for: accountID)
+            lib = b; loadedFor = accountID
+        }
+    }
+}
+
+// MARK: - recently played
+
+/// Albums from the play history, most recent first, one tile per album.
+/// A song played from outside the library (search result) gets a one-track
+/// album of its own so it still shows up.
+struct RecentlyPlayedPage: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject private var catalog = CatalogStore.shared
+    @State private var albums: [CatalogAlbum] = []
+
+    var body: some View {
+        AlbumsPage(title: "Recently Played", albums: albums, modeKey: "played")
+            .task(id: "\(model.historyVersion)|\(catalog.version)") {
+                let byID = Dictionary(catalog.albums.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+                var seen = Set<String>(), out: [CatalogAlbum] = []
+                for (date, m) in AppDatabase.shared.history(limit: 500) {
+                    let t = CatalogTrack(meta: m, addedAt: date)
+                    let key = t.albumKey
+                    guard seen.insert(key).inserted else { continue }
+                    out.append(byID[key] ?? CatalogAlbum(
+                        id: key, title: t.album.isEmpty ? t.title : t.album, artist: t.artist,
+                        year: t.year, genre: t.genre, addedAt: date, tracks: [t], accountIDs: [t.accountID]))
+                    if out.count == 200 { break }
+                }
+                albums = out
+            }
     }
 }

@@ -10,10 +10,11 @@ final class AppModel: ObservableObject {
     enum Phase { case signedOut, linking, loading, ready, error(String) }
     /// Sidebar destinations, Music.app layout (v2.0).
     enum Pane: Hashable {
-        case recentlyAdded, artists, albums, songs, genres, downloads, search
+        case recentlyAdded, recentlyPlayed, artists, albums, songs, genres, downloads, search
         case loved                                  // ♥ (Favourite Songs)
         case playlist(PlexMetadata)                 // a source playlist
         case localPlaylist(Int64)                   // Spectra playlist (Radio ♥…)
+        case source(String)                         // one library (account ID)
     }
 
     @Published var phase: Phase = .signedOut
@@ -23,6 +24,7 @@ final class AppModel: ObservableObject {
     @Published var pane: Pane = {
         switch UserDefaults.standard.string(forKey: "sidebar.pane") {
         case "recentlyAdded": return .recentlyAdded
+        case "recentlyPlayed": return .recentlyPlayed
         case "artists": return .artists
         case "songs": return .songs
         case "genres": return .genres
@@ -31,7 +33,7 @@ final class AppModel: ObservableObject {
     }() {
         didSet {
             let name: String? = switch pane {
-            case .recentlyAdded: "recentlyAdded"; case .artists: "artists"; case .albums: "albums"
+            case .recentlyAdded: "recentlyAdded"; case .recentlyPlayed: "recentlyPlayed"; case .artists: "artists"; case .albums: "albums"
             case .songs: "songs"; case .genres: "genres"; default: nil
             }
             if let name { UserDefaults.standard.set(name, forKey: "sidebar.pane") }
@@ -673,6 +675,17 @@ final class AppModel: ObservableObject {
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty ? nil : name
+    }
+
+    /// Sidebar « Library » rows: one per source, Local > Plex > YouTube Music.
+    var librarySources: [Account] {
+        accounts.sorted { (CatalogStore.rank($0.kind), $0.name) < (CatalogStore.rank($1.kind), $1.name) }
+    }
+
+    func renameAccount(_ a: Account) {
+        guard let name = promptName("Rename Library", initial: a.name), name != a.name else { return }
+        AccountStore.shared.rename(a.id, to: name)
+        accounts = AccountStore.shared.accounts
     }
 
     func renameLocalPlaylist(_ p: LocalPlaylist) {

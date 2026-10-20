@@ -60,13 +60,24 @@ struct MusicSidebar: View {
     var body: some View {
         List(selection: Binding(get: { model.pane },
                                 set: { model.pane = $0; model.openAlbum = nil; model.searchQuery = "" })) {
-            Section("Library") {
+            Section("All Libraries") {
                 row(.recentlyAdded, "Recently Added", "clock")
+                row(.recentlyPlayed, "Recently Played", "clock.arrow.circlepath")
                 row(.artists, "Artists", "music.mic")
                 row(.albums, "Albums", "square.stack")
                 row(.songs, "Songs", "music.note")
                 row(.genres, "Genres", "guitars")
                 row(.downloads, "Downloaded", "arrow.down.circle")
+            }
+            Section("Library") {
+                ForEach(model.librarySources) { acc in
+                    Label(acc.name, systemImage: acc.kind.systemImage)
+                        .tag(AppModel.Pane.source(acc.id))
+                        .contextMenu {
+                            Button("Rename…") { model.renameAccount(acc) }
+                            Button("Refresh") { if let p = model.pool[acc.id] { CatalogStore.shared.refresh(accountID: acc.id, provider: p) } }
+                        }
+                }
             }
             Section("Playlists") {
                 row(.loved, "Favourite Songs", "heart.fill")
@@ -150,6 +161,8 @@ struct ContentRouter: View {
                 switch model.pane {
                 case .recentlyAdded:
                     AlbumsPage(title: "Recently Added", albums: recent, modeKey: "recent")
+                case .recentlyPlayed:
+                    RecentlyPlayedPage()
                 case .albums:
                     AlbumsPage(title: "Albums", albums: catalog.albums, modeKey: "albums")
                 case .songs:
@@ -166,6 +179,8 @@ struct ContentRouter: View {
                     PlaylistPage(source: .loved)
                 case .playlist(let pl):
                     PlaylistPage(source: .remote(pl))
+                case .source(let id):
+                    SourcePage(accountID: id)
                 case .localPlaylist(let id):
                     if let pl = model.localPlaylists.first(where: { $0.id == id }) {
                         PlaylistPage(source: .local(pl))

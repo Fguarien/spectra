@@ -57,6 +57,12 @@ final class AccountStore {
         persist()
     }
 
+    func rename(_ id: String, to name: String) {
+        guard let i = accounts.firstIndex(where: { $0.id == id }) else { return }
+        accounts[i].name = name
+        persist()
+    }
+
     func token(for id: String) -> String? { Keychain.get(account: tokenKey(id)) }
 
     private func tokenKey(_ id: String) -> String { "account.\(id)" }

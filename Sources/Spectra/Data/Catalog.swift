@@ -91,6 +91,11 @@ final class CatalogStore: ObservableObject {
     /// not per keystroke: folding 27 000 titles each time made search lag).
     private var trackKeys: [String] = []
     private var albumKeys: [String] = []
+    /// One library on its own (sidebar « Library » rows), built on demand
+    /// from that account's rows only — the merged lists keep one copy per
+    /// song, so filtering them would hide what a source also has elsewhere.
+    private var perSource: [String: Built] = [:]
+    @Published private(set) var version = 0
 
     /// accountID → kind, for source ranking and badges (set by AppModel).
     var kinds: [String: ProviderKind] = [:]
@@ -132,6 +137,17 @@ final class CatalogStore: ObservableObject {
     private func apply(_ b: Built) {
         tracks = b.tracks; albums = b.albums; artists = b.artists; genres = b.genres
         trackKeys = b.trackKeys; albumKeys = b.albumKeys
+        perSource = [:]; version += 1
+    }
+
+    func library(for accountID: String) async -> Built {
+        if let b = perSource[accountID] { return b }
+        let kinds = self.kinds
+        let b = await Task.detached(priority: .userInitiated) {
+            Self.build(AppDatabase.shared.catalogRows().filter { $0.accountID == accountID }, kinds: kinds)
+        }.value
+        perSource[accountID] = b
+        return b
     }
 
     /// Library matches for the search page: albums by title or artist, songs
