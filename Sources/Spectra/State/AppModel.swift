@@ -588,29 +588,52 @@ final class AppModel: ObservableObject {
         reloadLocalPlaylists()
     }
 
-    /// Find a song by artist + title in the user's sources, best source first
-    /// (Local files, then Plex, then YouTube Music). Nil if nowhere.
+    /// Find a song by artist + title in the user's sources. The best MATCH
+    /// wins across all sources; the source order (Local > Plex > YouTube Music)
+    /// only breaks ties. An exact title beats a remaster tag, and live / demo /
+    /// remix / rough-mix / instrumental takes are refused unless asked for —
+    /// v1.14 took "No Quarter (rough mix… no vocal)" from Plex over the studio
+    /// track because any title *starting with* the name was accepted.
     func findSong(artist: String, title: String) async -> PlexMetadata? {
         let wantArtist = MergedArtist.normalise(artist)
         let wantTitle = MergedArtist.normalise(title)
         let rank: [ProviderKind: Int] = [.local: 0, .plex: 1, .youtubeMusic: 2]
         let ordered = accounts.filter { poolConnected.contains($0.id) }
             .sorted { (rank[$0.kind] ?? 9) < (rank[$1.kind] ?? 9) }
+        var best: (score: Int, srcRank: Int, m: PlexMetadata)?
         for acc in ordered {
             guard let p = pool[acc.id],
                   let hubs = try? await p.search("\(artist) \(title)") else { continue }
             let tracks = hubs.filter { ($0.type ?? "") == "track" || ($0.title ?? "").lowercased().contains("song") }
                 .flatMap(\.items)
-            if let hit = tracks.first(where: { t in
+            for t in tracks {
                 let a = MergedArtist.normalise(t.grandparentTitle ?? "")
-                let n = MergedArtist.normalise(t.title)
-                return (a == wantArtist || a.contains(wantArtist) || wantArtist.contains(a)) && !a.isEmpty
-                    && (n == wantTitle || n.hasPrefix(wantTitle))
-            }) {
-                return hit.tagged(acc.id)
+                guard !a.isEmpty, a == wantArtist || a.contains(wantArtist) || wantArtist.contains(a),
+                      let score = Self.titleScore(MergedArtist.normalise(t.title), want: wantTitle) else { continue }
+                let r = rank[acc.kind] ?? 9
+                if best == nil || (score, r) < (best!.score, best!.srcRank) { best = (score, r, t.tagged(acc.id)) }
             }
+            if best?.score == 0 { break }   // exact match: later sources can't beat it
         }
-        return nil
+        return best?.m
+    }
+
+    /// 0 = exact title, 1 = same title + a harmless tag (remaster, stereo mix,
+    /// single/album version, radio edit), nil = another take or another song.
+    static func titleScore(_ have: String, want: String) -> Int? {
+        if have == want { return 0 }
+        guard have.hasPrefix(want) else { return nil }
+        let extra = String(have.dropFirst(want.count))
+        // The rest must be an annotation, not more words: "time after time" is
+        // another song than "time" (substring checks on "ft" matched "after").
+        let tail = extra.trimmingCharacters(in: .whitespaces)
+        guard tail.isEmpty || "([-–—".contains(tail.first!) || tail.hasPrefix("feat") else { return nil }
+        let refused = ["live", "demo", "remix", "rough", "instrumental", "karaoke", "acoustic",
+                       "sped up", "slowed", "rehearsal", "outtake", "take ", "no vocal", "a cappella", "cover"]
+        if refused.contains(where: { extra.contains($0) && !want.contains($0) }) { return nil }
+        let harmless = ["remaster", "stereo", "mono", "mix", "version", "edit", "deluxe", "bonus", "feat"]
+        return harmless.contains(where: { tail.contains($0) })
+            || tail.trimmingCharacters(in: .punctuationCharacters.union(.whitespaces)).isEmpty ? 1 : nil
     }
 
     // MARK: database backups on the NAS
