@@ -22,6 +22,33 @@ final class DownloadManager: ObservableObject {
     @Published private(set) var lastError: String?
     /// Requests waiting for the NAS.
     @Published private(set) var parkedCount = 0
+    /// Albums / playlists asked for as a whole: collection key → its tracks'
+    /// ratingKeys, so a row can show "downloaded" without loading its tracks.
+    @Published private(set) var collections: [String: [String]] =
+        (UserDefaults.standard.dictionary(forKey: "downloads.collections") as? [String: [String]]) ?? [:]
+
+    static func collectionKey(_ m: PlexMetadata) -> String { "\(m.sourceAccountID ?? "")|\(m.ratingKey)" }
+
+    func remember(collection m: PlexMetadata, tracks: [PlexMetadata]) {
+        guard !tracks.isEmpty else { return }
+        collections[Self.collectionKey(m)] = tracks.map(\.ratingKey)
+        UserDefaults.standard.set(collections, forKey: "downloads.collections")
+    }
+
+    enum State: Equatable { case none, downloading(Int, Int), partial(Int, Int), full }
+
+    /// State of a set of tracks: all on the NAS, some, in progress, or none.
+    func state(of keys: [String]) -> State {
+        guard !keys.isEmpty else { return .none }
+        let done = keys.filter(downloaded.contains).count
+        if keys.contains(where: { inFlight[$0] != nil }) { return .downloading(done, keys.count) }
+        if done == keys.count { return .full }
+        return done == 0 ? .none : .partial(done, keys.count)
+    }
+
+    func state(ofCollection m: PlexMetadata) -> State {
+        collections[Self.collectionKey(m)].map(state(of:)) ?? .none
+    }
 
     /// Called to replay a parked request (set by AppModel, which owns providers).
     var resume: ((PlexMetadata) -> Bool)?

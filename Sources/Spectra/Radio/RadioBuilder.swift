@@ -14,7 +14,16 @@ import Foundation
 @MainActor
 final class RadioBuilder: ObservableObject {
     static let shared = RadioBuilder()
-    static let playlistName = "Radio ♥"
+    static let playlistPrefix = "Radio ♥ — "
+    static let lengths = [10, 30, 50]
+
+    /// Tracks per radio (seed included): 10, 30 or 50 — Settings → Radio ♥.
+    @Published var length: Int = {
+        let v = UserDefaults.standard.integer(forKey: "radio.length")
+        return RadioBuilder.lengths.contains(v) ? v : 30
+    }() {
+        didSet { UserDefaults.standard.set(length, forKey: "radio.length") }
+    }
 
     @Published private(set) var status: String?
     weak var model: AppModel?
@@ -22,7 +31,6 @@ final class RadioBuilder: ObservableObject {
     private let endpoint = URL(string: "https://litellm.savethemall.eu/v1/chat/completions")!
     private let alias = "cheap-model-ollama"
     private let keyAccount = "litellm.key"
-    private let maxPicks = 12
 
     func start() { importProvisioningFile() }
 
@@ -49,28 +57,43 @@ final class RadioBuilder: ObservableObject {
         guard !artist.isEmpty else { show("Radio ♥: no artist on “\(seed.title)”."); return }
         show("Radio ♥: finding tracks like “\(seed.title)”…", sticky: true)
 
-        let candidates = await LastFM.shared.similarTracks(artist: artist, title: seed.title, limit: 50)
+        let target = length
+        let maxPicks = target - 1                       // the seed opens the radio
+        // Enough candidates for the LLM to choose from and for misses to resolve.
+        let candidates = await LastFM.shared.similarTracks(artist: artist, title: seed.title,
+                                                           limit: min(100, max(50, target * 2)))
         guard !candidates.isEmpty else { show("Radio ♥: Last.fm knows nothing similar to “\(seed.title)”."); return }
 
         show("Radio ♥: picking the best of \(candidates.count)…", sticky: true)
-        let order = await llmPicks(seed: "\(artist) — \(seed.title)", candidates: candidates)
-            ?? Array(candidates.indices.prefix(maxPicks))
-        let picks = order.filter { candidates.indices.contains($0) }.prefix(maxPicks).map { candidates[$0] }
+        // Ask for a few extra: some picks won't be found in any source.
+        let wanted = min(candidates.count, maxPicks + max(3, maxPicks / 5))
+        let order = await llmPicks(seed: "\(artist) — \(seed.title)", candidates: candidates, count: wanted)
+            ?? Array(candidates.indices.prefix(wanted))
+        let picks = order.filter { candidates.indices.contains($0) }.prefix(wanted).map { candidates[$0] }
 
         show("Radio ♥: finding \(picks.count) tracks in your sources…", sticky: true)
         guard let model else { return }
+        // At most 4 lookups at once: each may spawn a yt-dlp/ytmusicapi process.
         var found: [Int: PlexMetadata] = [:]
         await withTaskGroup(of: (Int, PlexMetadata?).self) { group in
-            for (i, p) in picks.enumerated() {
+            var next = 0
+            func launch() {
+                guard next < picks.count else { return }
+                let i = next, p = picks[i]; next += 1
                 group.addTask { (i, await model.findSong(artist: p.artist, title: p.title)) }
             }
-            for await (i, m) in group { if let m { found[i] = m } }
+            for _ in 0..<4 { launch() }
+            for await (i, m) in group {
+                if let m { found[i] = m }
+                launch()
+            }
         }
-        let tracks = found.keys.sorted().compactMap { found[$0] }
-        guard let id = AppDatabase.shared.playlistID(named: Self.playlistName, kind: "radio") else { return }
-        let added = AppDatabase.shared.append(tracks, toPlaylist: id)
+        let tracks = [seed] + found.keys.sorted().compactMap { found[$0] }.prefix(maxPicks)
+        let name = Self.playlistPrefix + seed.title
+        guard let id = AppDatabase.shared.playlistID(named: name, kind: "radio") else { return }
+        let added = AppDatabase.shared.append(Array(tracks), toPlaylist: id)
         model.reloadLocalPlaylists()
-        show("Radio ♥: +\(added) track(s) from “\(seed.title)”" + (tracks.count < picks.count ? " (\(picks.count - tracks.count) not found)" : ""))
+        show("“\(name)”: \(added) track(s)" + (tracks.count < target ? " — only \(tracks.count) of \(target) found" : ""))
     }
 
     private func show(_ s: String, sticky: Bool = false) {
@@ -85,7 +108,7 @@ final class RadioBuilder: ObservableObject {
     // MARK: LLM curation
 
     /// Indices into `candidates`, best flow first; nil on any failure.
-    private func llmPicks(seed: String, candidates: [LastFM.Similar]) async -> [Int]? {
+    private func llmPicks(seed: String, candidates: [LastFM.Similar], count maxPicks: Int) async -> [Int]? {
         guard let key = Keychain.get(account: keyAccount) else { return nil }
         let list = candidates.enumerated().map { "\($0.offset). \($0.element.artist) — \($0.element.title)" }
             .joined(separator: "\n")
@@ -102,7 +125,7 @@ final class RadioBuilder: ObservableObject {
             "response_format": ["type": "json_object"],
             "messages": [["role": "system", "content": system], ["role": "user", "content": user]],
         ]
-        var req = URLRequest(url: endpoint, timeoutInterval: 150)   // cold model load measured at 43 s
+        var req = URLRequest(url: endpoint, timeoutInterval: 240)   // measured: 43 s cold (12 picks), 91 s for a 50-track radio
         req.httpMethod = "POST"
         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")

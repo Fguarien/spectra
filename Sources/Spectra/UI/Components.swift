@@ -102,6 +102,34 @@ struct OfflineBadge: View {
     }
 }
 
+/// Downloaded marker for an album or a playlist: filled when every track is
+/// on the NAS, outlined with a count when only some are, spinner while busy.
+struct CollectionBadge: View {
+    @ObservedObject private var downloads = DownloadManager.shared
+    var collection: PlexMetadata? = nil
+    var trackKeys: [String]? = nil
+
+    var body: some View {
+        let state = trackKeys.map { downloads.state(of: $0) }
+            ?? collection.map { downloads.state(ofCollection: $0) } ?? .none
+        switch state {
+        case .none: EmptyView()
+        case .full:
+            Image(systemName: "arrow.down.circle.fill").foregroundStyle(.secondary).font(.caption)
+                .help("Downloaded to the NAS")
+        case .partial(let d, let t):
+            Image(systemName: "arrow.down.circle").foregroundStyle(.secondary).font(.caption)
+                .help("\(d) of \(t) tracks downloaded")
+        case .downloading(let d, let t):
+            HStack(spacing: 3) {
+                ProgressView().controlSize(.mini)
+                Text("\(d)/\(t)").font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+            }
+            .help("Downloading to the NAS")
+        }
+    }
+}
+
 func durationText(_ ms: Int?) -> String {
     guard let ms else { return "" }
     let s = ms / 1000

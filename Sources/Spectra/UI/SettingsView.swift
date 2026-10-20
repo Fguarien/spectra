@@ -6,6 +6,7 @@ struct SettingsView: View {
     @ObservedObject private var theme = ThemeManager.shared
     @AppStorage("notifyOnTrackChange") private var notifyOnTrackChange = true
     @ObservedObject private var lastfm = LastFM.shared
+    @ObservedObject private var radio = RadioBuilder.shared
 
     var body: some View {
         Form {
@@ -43,6 +44,15 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.bordered).controlSize(.small)
                 if let msg = model.backupMessage { Text(msg).font(.caption).foregroundStyle(.secondary) }
+            }
+
+            Section("Radio ♥") {
+                Picker("Tracks per radio", selection: $radio.length) {
+                    ForEach(RadioBuilder.lengths, id: \.self) { Text("\($0)").tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Text("Loving a track (♥) creates the playlist “Radio ♥ — <title>”: the loved track, then similar ones from Last.fm, curated by a local model and found in your sources (Local, Plex, YouTube Music).")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Last.fm") {

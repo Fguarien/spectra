@@ -202,11 +202,12 @@ final class LastFM: ObservableObject {
                 return Similar(artist: a, title: name)
             }
         }
-        guard let j = try? await call("artist.getSimilar", ["artist": artist, "limit": "10", "autocorrect": "1"], post: false),
+        let perArtist = min(10, max(5, (limit + 14) / 15))
+        guard let j = try? await call("artist.getSimilar", ["artist": artist, "limit": "15", "autocorrect": "1"], post: false),
               let artists = (j["similarartists"] as? [String: Any])?["artist"] as? [[String: Any]] else { return [] }
         var out: [Similar] = []
         for a in artists.compactMap({ $0["name"] as? String }) {
-            guard let tj = try? await call("artist.getTopTracks", ["artist": a, "limit": "5"], post: false),
+            guard let tj = try? await call("artist.getTopTracks", ["artist": a, "limit": String(perArtist)], post: false),
                   let tracks = (tj["toptracks"] as? [String: Any])?["track"] as? [[String: Any]] else { continue }
             out += tracks.compactMap { ($0["name"] as? String).map { Similar(artist: a, title: $0) } }
         }

@@ -21,12 +21,15 @@ struct PlaylistsView: View {
                             }
                         } icon: { Image(systemName: pl.kind == "radio" ? "heart.circle" : "music.note.list") }
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay(alignment: .trailing) {
+                            CollectionBadge(trackKeys: model.localPlaylistTracks(pl).map(\.ratingKey))
+                        }
                         .contentShape(Rectangle())
                         .onTapGesture { selected = nil; selectedLocal = pl; loadLocal(pl) }
                         .listRowBackground(selectedLocal?.id == pl.id ? Color.accentColor.opacity(0.22) : Color.clear)
                     }
                     if model.localPlaylists.isEmpty {
-                        Text("Love a track (♥) to start Radio ♥").foregroundStyle(.secondary)
+                        Text("Love a track (♥) to start a radio").foregroundStyle(.secondary)
                     }
                 }
                 Section("\(model.serverName.isEmpty ? "Account" : model.serverName) Playlists") {
@@ -38,6 +41,7 @@ struct PlaylistsView: View {
                             }
                         } icon: { Image(systemName: "music.note.list") }
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay(alignment: .trailing) { CollectionBadge(collection: pl) }
                         .contentShape(Rectangle())
                         .onTapGesture { selectedLocal = nil; selected = pl }
                         .listRowBackground(selected == pl ? Color.accentColor.opacity(0.22) : Color.clear)
@@ -70,6 +74,7 @@ struct PlaylistsView: View {
             VStack(spacing: 0) {
                 HStack {
                     Text(pl.name).font(.title2).fontWeight(.semibold)
+                    CollectionBadge(trackKeys: tracks.map(\.ratingKey))
                     Spacer()
                     Button { model.play(tracks, startAt: 0) } label: { Label("Play", systemImage: "play.fill") }
                         .disabled(tracks.isEmpty)
@@ -106,10 +111,11 @@ struct PlaylistsView: View {
             VStack(spacing: 0) {
                 HStack {
                     Text(pl.title).font(.title2).fontWeight(.semibold)
+                    CollectionBadge(trackKeys: tracks.map(\.ratingKey))
                     Spacer()
                     Button { model.play(tracks, startAt: 0) } label: { Label("Play", systemImage: "play.fill") }
                         .disabled(tracks.isEmpty)
-                    Button { model.downloadAll(tracks) } label: { Label("Download", systemImage: "arrow.down.circle") }
+                    Button { model.downloadAll(tracks, collection: pl) } label: { Label("Download", systemImage: "arrow.down.circle") }
                         .disabled(tracks.isEmpty)
                         .help("Download every track to the NAS")
                     Button(role: .destructive) {

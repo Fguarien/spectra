@@ -87,6 +87,8 @@ struct AlbumRow: View {
                     Text(String(year)).font(.caption).foregroundStyle(.secondary)
                 }
             }
+            Spacer(minLength: 4)
+            CollectionBadge(collection: album)
         }
     }
 }
@@ -125,9 +127,17 @@ struct TrackListView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(album.title).font(.title3).fontWeight(.semibold)
                 Text(album.parentTitle ?? "").foregroundStyle(.secondary)
-                Button {
-                    playFrom(index: 0, album: album)
-                } label: { Label("Play", systemImage: "play.fill") }
+                HStack {
+                    Button {
+                        playFrom(index: 0, album: album)
+                    } label: { Label("Play", systemImage: "play.fill") }
+                    Button { model.downloadAll(tracks, collection: album) } label: {
+                        Label("Download", systemImage: "arrow.down.circle")
+                    }
+                    .disabled(tracks.isEmpty)
+                    .help("Download the whole album to the NAS")
+                    CollectionBadge(trackKeys: tracks.map(\.ratingKey))
+                }
             }
             Spacer()
         }

@@ -46,6 +46,7 @@ struct SearchView: View {
                 Text(item.title)
                 Text("— \(item.grandparentTitle ?? "")").foregroundStyle(.secondary).font(.caption)
                 Spacer()
+                OfflineBadge(ratingKey: item.ratingKey)
                 Text(durationText(item.duration)).foregroundStyle(.secondary).font(.callout)
             }
             .contentShape(Rectangle())

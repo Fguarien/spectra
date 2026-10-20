@@ -435,8 +435,10 @@ final class AppModel: ObservableObject {
         return true
     }
 
-    /// Download every track of a playlist (two at a time).
-    func downloadAll(_ tracks: [PlexMetadata]) {
+    /// Download every track of an album or playlist (two at a time), and
+    /// remember the set so its row can show a downloaded badge.
+    func downloadAll(_ tracks: [PlexMetadata], collection: PlexMetadata? = nil) {
+        if let collection { DownloadManager.shared.remember(collection: collection, tracks: tracks) }
         for t in tracks where !DownloadManager.shared.isDownloaded(t.ratingKey) { download(t) }
     }
 
