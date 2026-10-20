@@ -9,10 +9,12 @@ struct NowPlayingBar: View {
     var body: some View {
         HStack(spacing: 14) {
             ArtworkView(url: player.current?.artworkURL, side: 48)
+                .onTapGesture { model.pane = .nowPlaying }
+                .help("Show Now Playing")
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(player.current?.title ?? "Not playing").fontWeight(.medium).lineLimit(1)
-                Text(player.current.map { "\($0.artist) — \($0.album)" } ?? "")
+                Text(player.current.map { [$0.artist, $0.album].filter { !$0.isEmpty }.joined(separator: " — ") } ?? "")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 if player.current != nil {
                     StarRatingView(rating: player.current?.userRating ?? 0, compact: true) { model.rateCurrent(stars: $0) }
@@ -47,6 +49,8 @@ struct NowPlayingBar: View {
                 Text(timeText(player.duration)).font(.caption).monospacedDigit()
             }
 
+            Button { MiniPlayer.shared.toggle() } label: { Image(systemName: "pip") }
+                .buttonStyle(.borderless).help("Mini Player (⌘⇧M)")
             Button { showQueue.toggle() } label: { Image(systemName: "list.bullet") }
                 .buttonStyle(.borderless)
                 .popover(isPresented: $showQueue, arrowEdge: .top) { QueueView().frame(width: 360, height: 420) }

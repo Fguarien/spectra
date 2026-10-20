@@ -8,7 +8,7 @@ import AppKit
 @MainActor
 final class AppModel: ObservableObject {
     enum Phase { case signedOut, linking, loading, ready, error(String) }
-    enum Pane: Hashable { case library, allSources, playlists, search, downloads, settings }
+    enum Pane: Hashable { case nowPlaying, library, allSources, playlists, search, downloads, settings }
 
     @Published var phase: Phase = .signedOut
     @Published var linkCode: String?          // shown while the user approves in-browser
@@ -434,7 +434,8 @@ final class AppModel: ObservableObject {
             artworkURL: provider(for: m)?.artworkURL(m.thumb, size: 300),
             userRating: rating(m.ratingKey) ?? m.userRating.map { Int($0 / 2) },
             sourceAccountID: m.sourceAccountID ?? activeAccountID,
-            sourceKind: account(for: m)?.kind
+            sourceKind: account(for: m)?.kind,
+            largeArtworkURL: provider(for: m)?.artworkURL(m.thumb, size: 1200)
         )
     }
 

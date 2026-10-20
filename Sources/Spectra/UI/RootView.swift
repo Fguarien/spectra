@@ -41,6 +41,7 @@ struct RootView: View {
 
     @ViewBuilder private var paneView: some View {
         switch model.pane {
+        case .nowPlaying: NowPlayingView()
         case .library:   LibraryView()
         case .allSources: AllSourcesView()
         case .playlists: PlaylistsView()
@@ -57,6 +58,7 @@ struct Sidebar: View {
     @EnvironmentObject var model: AppModel
 
     private let items: [(AppModel.Pane, String, String)] = [
+        (.nowPlaying, "Now Playing", "play.circle"),
         (.library, "Library", "music.note.house"),
         (.allSources, "All Sources", "square.stack.3d.up"),
         (.playlists, "Playlists", "music.note.list"),

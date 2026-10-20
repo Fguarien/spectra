@@ -17,6 +17,7 @@ struct PlayableTrack: Identifiable, Equatable {
     var userRating: Int? = nil   // 0…5, mirrored for the transport bar
     var sourceAccountID: String? = nil   // account whose provider serves it
     var sourceKind: ProviderKind? = nil  // nil = offline download
+    var largeArtworkURL: URL? = nil      // Now Playing / mini player
 
     static func == (l: PlayableTrack, r: PlayableTrack) -> Bool { l.id == r.id && l.url == r.url }
 }
@@ -64,7 +65,11 @@ final class AudioPlayer: ObservableObject {
         ) { [weak self] t in
             guard let self else { return }
             self.currentTime = t.seconds
-            if let item = self.player.currentItem, item.duration.isNumeric {
+            // Prefer the source's own length: AVPlayer reports about twice the
+            // real duration on googlevideo DASH streams (5:54 for a 2:57 file).
+            if let ms = self.current?.durationMs, ms > 0 {
+                self.duration = Double(ms) / 1000
+            } else if let item = self.player.currentItem, item.duration.isNumeric {
                 self.duration = item.duration.seconds
             }
             self.updateNowPlayingElapsed()

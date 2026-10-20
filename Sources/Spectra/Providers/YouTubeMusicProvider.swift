@@ -100,7 +100,14 @@ final class YouTubeMusicProvider: MusicProvider {
         _ = try await runYtDlp(["-q", "--no-warnings", "--no-part", "--force-overwrites",
                                 "-f", "140/bestaudio[ext=m4a]/bestaudio", "-o", dest.path, id])
     }
-    func artworkURL(_ thumb: String?, size: Int) -> URL? { thumb.flatMap { URL(string: $0) } }
+    /// ytmusicapi thumbs are googleusercontent URLs sized by a `=wN-hN` suffix:
+    /// ask for the size the view needs instead of the 60–120 px default.
+    func artworkURL(_ thumb: String?, size: Int) -> URL? {
+        guard let thumb else { return nil }
+        let sized = thumb.replacingOccurrences(of: #"=w\d+-h\d+"#, with: "=w\(size)-h\(size)",
+                                               options: .regularExpression)
+        return URL(string: sized)
+    }
 
     // MARK: server hooks — inert
 

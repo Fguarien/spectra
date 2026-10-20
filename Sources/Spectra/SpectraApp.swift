@@ -38,6 +38,9 @@ struct SpectraCommands: Commands {
                 .keyboardShortcut(.rightArrow, modifiers: .command)
             Button("Previous") { AudioPlayer.shared.previous() }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
+            Divider()
+            Button("Mini Player") { MiniPlayer.shared.toggle() }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
         }
         CommandGroup(replacing: .help) {
             Button("Spectra Help") { openWindow(id: "help") }
