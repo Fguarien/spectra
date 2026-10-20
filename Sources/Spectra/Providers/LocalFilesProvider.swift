@@ -62,17 +62,26 @@ final class LocalFilesProvider: MusicProvider {
     }
 
     /// Every scanned file, dated by the file's creation (= when it entered the
-    /// folder), which is what « Recently Added » sorts on.
+    /// folder, what « Recently Added » sorts on) and timed from the file
+    /// itself (the folder layout carries no duration). Eight files at a time.
     func catalog() async throws -> [PlexMetadata] {
-        let tracks = index.allTracks
-        return await Task.detached(priority: .utility) {
-            tracks.map { t in
-                var t = t
-                let v = try? URL(fileURLWithPath: t.ratingKey).resourceValues(forKeys: [.creationDateKey])
-                t.addedAt = v?.creationDate.map { Int($0.timeIntervalSince1970) }
-                return t
+        let urls = index.allTracks.map { URL(fileURLWithPath: $0.ratingKey) }
+        // withBounded returns in completion order: key the answers by path.
+        let info = await Self.withBounded(urls, limit: 8) { url -> (String, Int?, Int?) in
+            let created = (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate
+            let d = try? await AVURLAsset(url: url).load(.duration)
+            let ms = d.flatMap { $0.isNumeric ? Int($0.seconds * 1000) : nil }
+            return (url.path, created.map { Int($0.timeIntervalSince1970) }, ms)
+        }
+        let byPath = Dictionary(info.map { ($0.0, ($0.1, $0.2)) }, uniquingKeysWith: { a, _ in a })
+        return index.allTracks.map { t in
+            var t = t
+            if let i = byPath[t.ratingKey] {
+                t.addedAt = i.0
+                if let ms = i.1, ms > 0 { t.duration = ms }
             }
-        }.value
+            return t
+        }
     }
 
     // MARK: playlists / related — not supported for a plain folder (yet)

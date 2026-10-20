@@ -519,14 +519,7 @@ struct AddToPlaylistMenu: View {
                 Button(pl.title) { model.addToPlaylist(pl, tracks: tracks) }
             }
             Divider()
-            Button("New Playlist") {
-                let name = "Playlist " + Date().formatted(date: .abbreviated, time: .shortened)
-                if let id = AppDatabase.shared.playlistID(named: name, kind: "manual") {
-                    _ = AppDatabase.shared.append(tracks, toPlaylist: id)
-                    model.reloadLocalPlaylists()
-                    model.pane = .localPlaylist(id)
-                }
-            }
+            Button("New Playlist…") { model.newLocalPlaylist(with: tracks) }
         }
     }
 }
@@ -714,6 +707,8 @@ struct PlaylistPage: View {
         }
     }
 
+    private var isLocal: Bool { if case .local = source { return true } else { return false } }
+
     private var emptyText: String {
         if case .loved = source { return "Love a song (♥) and it shows up here" }
         return "This playlist is empty"
@@ -733,6 +728,8 @@ struct PlaylistPage: View {
                 .frame(width: 180, height: 180)
             VStack(alignment: .leading, spacing: 6) {
                 Text(title).font(.system(size: 28, weight: .bold)).lineLimit(2)
+                    .onTapGesture(count: 2) { if case .local(let p) = source { model.renameLocalPlaylist(p) } }
+                    .help(isLocal ? "Double-click to rename" : "")
                 HStack(spacing: 6) {
                     Text(formatTotal(ms: tracks.reduce(0) { $0 + $1.durationMs }, songs: tracks.count))
                     if case .remote(let p) = source { SourceIcon(accountID: p.sourceAccountID) }

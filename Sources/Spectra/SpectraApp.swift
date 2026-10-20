@@ -41,6 +41,10 @@ struct SpectraCommands: Commands {
         CommandGroup(replacing: .appInfo) {
             Button("About Spectra") { Self.showAbout() }
         }
+        CommandGroup(replacing: .newItem) {
+            Button("New Playlist…") { model.newLocalPlaylist() }
+                .keyboardShortcut("n", modifiers: .command)
+        }
         CommandGroup(after: .newItem) {
             Divider()
             Button("Add Plex Account…") { model.startLink() }

@@ -78,7 +78,13 @@ final class AppModel: ObservableObject {
         DownloadManager.shared.resume = { [weak self] m in self?.download(m) ?? false }
         DownloadManager.shared.migrateLegacyDownloads()
         startBackups()
-        AudioPlayer.shared.onTrackChange = { track in TrackNotifier.shared.notify(track) }
+        AudioPlayer.shared.onTrackChange = { [weak self] track in
+            TrackNotifier.shared.notify(track)
+            if let m = track.meta {
+                AppDatabase.shared.recordPlay(m)
+                self?.historyVersion += 1
+            }
+        }
         // Report playback to whichever provider serves the current track.
         AudioPlayer.shared.onTimeline = { [weak self] key, state, t, d in
             guard let self else { return }
@@ -380,10 +386,13 @@ final class AppModel: ObservableObject {
                     return (i, sections)
                 }
             }
-            for await r in group { bucket.append(r) }
+            // Show each source as soon as it answers (Plex in ms, YouTube in seconds).
+            for await r in group {
+                bucket.append(r)
+                if !Task.isCancelled { searchHits = bucket.sorted { $0.0 < $1.0 }.flatMap(\.1) }
+            }
         }
         guard !Task.isCancelled else { return }
-        searchHits = bucket.sorted { $0.0 < $1.0 }.flatMap(\.1)
         searching = false
     }
 
@@ -648,6 +657,39 @@ final class AppModel: ObservableObject {
     }
 
     func localPlaylistTracks(_ p: LocalPlaylist) -> [PlexMetadata] { AppDatabase.shared.localPlaylistTracks(p.id) }
+
+    @Published private(set) var historyVersion = 0
+
+    /// Small modal asking for a name (rename / new playlist).
+    func promptName(_ title: String, initial: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        let field = NSTextField(string: initial)
+        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
+    func renameLocalPlaylist(_ p: LocalPlaylist) {
+        guard let name = promptName("Rename Playlist", initial: p.name), name != p.name else { return }
+        AppDatabase.shared.renameLocalPlaylist(p.id, to: name)
+        reloadLocalPlaylists()
+    }
+
+    /// New Spectra playlist (optionally seeded), named by the user, then shown.
+    func newLocalPlaylist(with tracks: [PlexMetadata] = []) {
+        guard let name = promptName("New Playlist", initial: "Untitled Playlist"),
+              let id = AppDatabase.shared.playlistID(named: name, kind: "manual") else { return }
+        if !tracks.isEmpty { _ = AppDatabase.shared.append(tracks, toPlaylist: id) }
+        reloadLocalPlaylists()
+        openAlbum = nil; searchQuery = ""
+        pane = .localPlaylist(id)
+    }
 
     func deleteLocalPlaylist(_ p: LocalPlaylist) {
         AppDatabase.shared.deleteLocalPlaylist(p.id)

@@ -68,7 +68,7 @@ struct PlexMetadata: Codable {
     let parentRatingKey: String?
     let grandparentRatingKey: String?
     let index: Int?
-    let duration: Int?          // milliseconds
+    var duration: Int?          // milliseconds (var: Local fills it from the file)
     let userRating: Double?
     let year: Int?
     let leafCount: Int?         // playlist/album track count

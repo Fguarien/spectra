@@ -87,6 +87,10 @@ final class CatalogStore: ObservableObject {
     @Published private(set) var genres: [CatalogGenre] = []
     @Published private(set) var syncing: Set<String> = []          // account IDs
     @Published private(set) var errors: [String: String] = [:]
+    /// Normalised search text, parallel to `tracks` / `albums` (built once,
+    /// not per keystroke: folding 27 000 titles each time made search lag).
+    private var trackKeys: [String] = []
+    private var albumKeys: [String] = []
 
     /// accountID → kind, for source ranking and badges (set by AppModel).
     var kinds: [String: ProviderKind] = [:]
@@ -127,6 +131,22 @@ final class CatalogStore: ObservableObject {
 
     private func apply(_ b: Built) {
         tracks = b.tracks; albums = b.albums; artists = b.artists; genres = b.genres
+        trackKeys = b.trackKeys; albumKeys = b.albumKeys
+    }
+
+    /// Library matches for the search page: albums by title or artist, songs
+    /// by title or artist.
+    func search(_ query: String, albumLimit: Int = 20, songLimit: Int = 40) -> ([CatalogAlbum], [CatalogTrack]) {
+        let n = MergedArtist.normalise(query)
+        guard n.count >= 2 else { return ([], []) }
+        var al: [CatalogAlbum] = [], so: [CatalogTrack] = []
+        for (i, k) in albumKeys.enumerated() where k.contains(n) {
+            al.append(albums[i]); if al.count == albumLimit { break }
+        }
+        for (i, k) in trackKeys.enumerated() where k.contains(n) {
+            so.append(tracks[i]); if so.count == songLimit { break }
+        }
+        return (al, so)
     }
 
     // MARK: refresh
@@ -181,6 +201,8 @@ final class CatalogStore: ObservableObject {
         var albums: [CatalogAlbum] = []
         var artists: [CatalogArtist] = []
         var genres: [CatalogGenre] = []
+        var trackKeys: [String] = []
+        var albumKeys: [String] = []
     }
 
     nonisolated static func rank(_ kind: ProviderKind?) -> Int {
@@ -219,6 +241,8 @@ final class CatalogStore: ObservableObject {
         albums.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         b.albums = albums
         b.tracks = albums.flatMap(\.tracks)
+        b.albumKeys = albums.map { MergedArtist.normalise($0.title + " " + $0.artist) }
+        b.trackKeys = b.tracks.map { MergedArtist.normalise($0.title + " " + $0.artist) }
 
         var byArtist: [String: [CatalogAlbum]] = [:]
         var artistName: [String: String] = [:]

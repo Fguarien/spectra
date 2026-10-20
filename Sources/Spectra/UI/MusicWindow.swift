@@ -76,6 +76,7 @@ struct MusicSidebar: View {
                         .contextMenu {
                             Button("Play") { model.play(model.localPlaylistTracks(pl), startAt: 0) }
                             Button("Download Playlist") { model.downloadAll(model.localPlaylistTracks(pl)) }
+                            Button("Rename…") { model.renameLocalPlaylist(pl) }
                             Divider()
                             Button("Delete Playlist", role: .destructive) { model.deleteLocalPlaylist(pl) }
                         }

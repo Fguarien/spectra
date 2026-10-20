@@ -123,6 +123,35 @@ extension AppDatabase {
         }
     }
 
+    func renameLocalPlaylist(_ id: Int64, to name: String) {
+        try? dbQueue.write { db in
+            try db.execute(sql: "UPDATE localPlaylist SET name = ? WHERE id = ?", arguments: [name, id])
+        }
+    }
+
+    // MARK: history (Playing Next → History)
+
+    func recordPlay(_ m: PlexMetadata) {
+        try? dbQueue.write { db in
+            try db.execute(sql: "INSERT INTO history (playedAt, meta) VALUES (?, ?)",
+                           arguments: [Date().timeIntervalSince1970, Self.encode(m)])
+            // Keep the last 500.
+            try db.execute(sql: "DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY id DESC LIMIT 500)")
+        }
+    }
+
+    func history(limit: Int = 200) -> [(Date, PlexMetadata)] {
+        (try? dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT playedAt, meta FROM history ORDER BY id DESC LIMIT ?", arguments: [limit])
+                .compactMap { r -> (Date, PlexMetadata)? in
+                    guard let m = Self.decode(r["meta"]) else { return nil }
+                    return (Date(timeIntervalSince1970: r["playedAt"]), m)
+                }
+        }) ?? []
+    }
+
+    func clearHistory() { try? dbQueue.write { try $0.execute(sql: "DELETE FROM history") } }
+
     func deleteLocalPlaylist(_ id: Int64) {
         try? dbQueue.write { db in
             try db.execute(sql: "DELETE FROM localPlaylistItem WHERE playlistID = ?", arguments: [id])

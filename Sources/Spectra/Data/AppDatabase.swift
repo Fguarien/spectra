@@ -123,6 +123,14 @@ final class AppDatabase {
                 t.column("count", .integer).notNull()
             }
         }
+        // v2.0.4 — Playing Next → History, replayable (full provider row kept).
+        m.registerMigration("v5-history") { db in
+            try db.create(table: "history") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("playedAt", .double).notNull()
+                t.column("meta", .text).notNull()
+            }
+        }
         return m
     }
 

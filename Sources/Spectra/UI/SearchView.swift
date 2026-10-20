@@ -9,6 +9,14 @@ struct SearchView: View {
     @ObservedObject private var player = AudioPlayer.shared
 
     var body: some View {
+        content
+            // Computed once per query (not per redraw: the player ticks every second).
+            .task(id: model.searchQuery) {
+                (libraryAlbums, librarySongs) = CatalogStore.shared.search(model.searchQuery)
+            }
+    }
+
+    private var content: some View {
         NavigationStack {
             Group {
                 if model.searchHits.isEmpty && libraryAlbums.isEmpty && librarySongs.isEmpty {
@@ -59,21 +67,8 @@ struct SearchView: View {
     }
 
     // Matches in the merged library, shown first (instant, offline-safe).
-    private var needle: String { MergedArtist.normalise(model.searchQuery) }
-
-    private var libraryAlbums: [CatalogAlbum] {
-        let n = needle
-        guard n.count >= 2 else { return [] }
-        return Array(CatalogStore.shared.albums.lazy.filter {
-            MergedArtist.normalise($0.title).contains(n) || MergedArtist.normalise($0.artist).contains(n)
-        }.prefix(20))
-    }
-
-    private var librarySongs: [CatalogTrack] {
-        let n = needle
-        guard n.count >= 2 else { return [] }
-        return Array(CatalogStore.shared.tracks.lazy.filter { MergedArtist.normalise($0.title).contains(n) }.prefix(30))
-    }
+    @State private var libraryAlbums: [CatalogAlbum] = []
+    @State private var librarySongs: [CatalogTrack] = []
 
     @ViewBuilder private func hubRow(_ item: PlexMetadata, type: String) -> some View {
         if type == "track" {
