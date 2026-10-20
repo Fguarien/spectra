@@ -91,7 +91,8 @@ final class LocalFilesProvider: MusicProvider {
     /// Already on disk — nothing to download.
     func downloadURL(for m: PlexMetadata) -> URL? { nil }
     func artworkURL(_ thumb: String?, size: Int) -> URL? {
-        thumb.map { URL(fileURLWithPath: $0) }
+        guard let thumb else { return nil }
+        return thumb.hasPrefix("http") ? URL(string: thumb) : URL(fileURLWithPath: thumb)
     }
 
     // MARK: server hooks — inert for a local source
@@ -110,59 +111,74 @@ final class LocalFilesProvider: MusicProvider {
 
     // MARK: scanning
 
+    private struct Resolved: Sendable {
+        let url: URL; let artist: String; let album: String
+        let title: String; let index: Int?; let thumb: String?
+    }
+
     private static func buildIndex(root: URL) async throws -> Index {
         let fm = FileManager.default
         let rootComps = root.standardizedFileURL.pathComponents
 
-        func relComponents(_ url: URL) -> [String] {
+        let relDirs: @Sendable (URL) -> [String] = { url in
             let comps = url.standardizedFileURL.pathComponents
-            guard comps.count > rootComps.count else { return [url.lastPathComponent] }
-            return Array(comps.dropFirst(rootComps.count))
+            guard comps.count > rootComps.count else { return [] }
+            return Array(comps.dropFirst(rootComps.count).dropLast())
         }
-
-        struct Track { let url: URL; let index: Int?; let title: String }
-        var tree: [String: [String: [Track]]] = [:]       // artist → album → tracks
-        var coverFor: [String: String] = [:]              // "artist/album" → image path
-        var flatFiles: [URL] = []                          // audio with no artist dir → resolve by tags/name
 
         guard let en = fm.enumerator(at: root, includingPropertiesForKeys: nil,
-                                     options: [.skipsHiddenFiles]) else {
-            return Index()
-        }
-        let allURLs = en.allObjects.compactMap { $0 as? URL }   // snapshot before any await
-        for url in allURLs {
-            let ext = url.pathExtension.lowercased()
-            let dirs = relComponents(url).dropLast()
+                                     options: [.skipsHiddenFiles]) else { return Index() }
+        let all = en.allObjects.compactMap { $0 as? URL }   // snapshot before any await
 
+        // Folder covers (cover.jpg / folder.png …) keyed by "artist/album".
+        var coverFor: [String: String] = [:]
+        var audio: [URL] = []
+        for url in all {
+            let ext = url.pathExtension.lowercased()
             if imageExts.contains(ext) {
-                let a = dirs.first ?? "Unknown Artist"
-                let al = dirs.count >= 2 ? dirs.last! : (dirs.first ?? "Unknown Album")
                 if coverNames.contains(url.deletingPathExtension().lastPathComponent.lowercased()) {
+                    let dirs = relDirs(url)
+                    let a = dirs.first ?? "Unknown Artist"
+                    let al = dirs.count >= 2 ? dirs.last! : (dirs.first ?? "Unknown Album")
                     coverFor["\(a)/\(al)"] = url.path
                 }
-                continue
-            }
-            guard audioExts.contains(ext) else { continue }
-
-            if let artist = dirs.first {
-                // Structured library (Artist/Album/Track): trust the path.
-                let album = dirs.count >= 2 ? dirs.last! : artist
-                let (idx, title) = parseTrackName(url.deletingPathExtension().lastPathComponent)
-                tree[artist, default: [:]][album, default: []].append(Track(url: url, index: idx, title: title))
-            } else {
-                // Loose file at the root: resolve from embedded tags / filename below.
-                flatFiles.append(url)
+            } else if audioExts.contains(ext) {
+                audio.append(url)
             }
         }
 
-        // Resolve flat files concurrently (bounded) from embedded tags, then from
-        // a "Artist - Title" filename, then fall back to Unknown.
-        if !flatFiles.isEmpty {
-            let resolved = await resolveFlat(flatFiles)
-            for r in resolved {
-                tree[r.artist, default: [:]][r.album, default: []]
-                    .append(Track(url: r.url, index: nil, title: r.title))
+        // Resolve every audio file (bounded concurrency). Structured libraries use
+        // the path; loose files use embedded tags then an "Artist - Title" name.
+        // Artwork = a folder cover, else the file's own embedded image.
+        let covers = coverFor
+        let resolved = await withBounded(audio, limit: 16) { url -> Resolved in
+            let dirs = relDirs(url)
+            if let artist = dirs.first {
+                let album = dirs.count >= 2 ? dirs.last! : artist
+                let (idx, title) = parseTrackName(url.deletingPathExtension().lastPathComponent)
+                let thumb: String?
+                if let folderCover = covers["\(artist)/\(album)"] { thumb = folderCover }
+                else { thumb = await embeddedArtwork(url) }
+                return Resolved(url: url, artist: artist, album: album, title: title, index: idx, thumb: thumb)
             }
+            let base = url.deletingPathExtension().lastPathComponent
+            let (tags, art) = await readTagsAndArt(url)
+            let artist: String, album: String, title: String
+            if let a = tags.artist, !a.isEmpty {
+                artist = a; album = tags.album ?? "Singles"; title = (tags.title?.isEmpty == false ? tags.title! : base)
+            } else if let (a, t) = splitArtistTitle(base) {
+                artist = a; album = tags.album ?? "Singles"; title = t
+            } else {
+                artist = "Unknown Artist"; album = tags.album ?? "Unknown Album"; title = (tags.title?.isEmpty == false ? tags.title! : base)
+            }
+            return Resolved(url: url, artist: artist, album: album, title: title, index: nil, thumb: art)
+        }
+
+        struct T { let url: URL; let index: Int?; let title: String; let thumb: String? }
+        var tree: [String: [String: [T]]] = [:]
+        for r in resolved {
+            tree[r.artist, default: [:]][r.album, default: []]
+                .append(T(url: r.url, index: r.index, title: r.title, thumb: r.thumb))
         }
 
         let ci: (String, String) -> Bool = { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
@@ -172,13 +188,13 @@ final class LocalFilesProvider: MusicProvider {
             var albumRows: [PlexMetadata] = []
             for album in tree[artist]!.keys.sorted(by: ci) {
                 let albumKey = "lalb:\(artist)\u{1}\(album)"
-                let cover = coverFor["\(artist)/\(album)"]
                 let sorted = tree[artist]![album]!.sorted {
                     ($0.index ?? Int.max, $0.title.lowercased()) < ($1.index ?? Int.max, $1.title.lowercased())
                 }
+                let albumThumb = sorted.compactMap(\.thumb).first
                 let trackRows = sorted.map { t in
                     PlexMetadata(ratingKey: t.url.path, title: t.title, type: "track",
-                                 thumb: cover, parentTitle: album, grandparentTitle: artist,
+                                 thumb: t.thumb ?? albumThumb, parentTitle: album, grandparentTitle: artist,
                                  parentRatingKey: albumKey, grandparentRatingKey: artistKey,
                                  index: t.index, filePath: t.url.path,
                                  fileContainer: t.url.pathExtension.lowercased())
@@ -187,7 +203,7 @@ final class LocalFilesProvider: MusicProvider {
                 out.allTracks.append(contentsOf: trackRows)
                 albumRows.append(
                     PlexMetadata(ratingKey: albumKey, title: album, type: "album",
-                                 thumb: cover, parentTitle: artist, grandparentTitle: artist,
+                                 thumb: albumThumb, parentTitle: artist, grandparentTitle: artist,
                                  parentRatingKey: artistKey, grandparentRatingKey: artistKey,
                                  leafCount: trackRows.count)
                 )
@@ -197,6 +213,25 @@ final class LocalFilesProvider: MusicProvider {
             out.artists.append(
                 PlexMetadata(ratingKey: artistKey, title: artist, type: "artist", thumb: artistThumb)
             )
+        }
+        return out
+    }
+
+    /// Run `work` over `items` with at most `limit` concurrent tasks.
+    private static func withBounded<T: Sendable>(_ items: [URL], limit: Int,
+                                                 _ work: @escaping @Sendable (URL) async -> T) async -> [T] {
+        var out: [T] = []; out.reserveCapacity(items.count)
+        var i = 0
+        while i < items.count {
+            let slice = Array(items[i..<min(i + limit, items.count)])
+            let part = await withTaskGroup(of: T.self) { group -> [T] in
+                for u in slice { group.addTask { await work(u) } }
+                var acc: [T] = []
+                for await r in group { acc.append(r) }
+                return acc
+            }
+            out.append(contentsOf: part)
+            i += limit
         }
         return out
     }
@@ -212,57 +247,33 @@ final class LocalFilesProvider: MusicProvider {
         return (n, title.isEmpty ? s : title)
     }
 
-    private struct FlatResolved { let url: URL; let artist: String; let album: String; let title: String }
-
-    /// Resolve loose (root-level) files: embedded tags first, then a
-    /// "Artist - Title" filename, then Unknown. Bounded concurrency so a large
-    /// liked-songs dump doesn't spawn thousands of AVAssets at once.
-    private static func resolveFlat(_ urls: [URL]) async -> [FlatResolved] {
-        let batch = 16
-        var out: [FlatResolved] = []
-        out.reserveCapacity(urls.count)
-        var i = 0
-        while i < urls.count {
-            let slice = Array(urls[i..<min(i + batch, urls.count)])
-            let part = await withTaskGroup(of: FlatResolved.self) { group -> [FlatResolved] in
-                for url in slice { group.addTask { await resolveOneFlat(url) } }
-                var acc: [FlatResolved] = []
-                for await r in group { acc.append(r) }
-                return acc
-            }
-            out.append(contentsOf: part)
-            i += batch
-        }
-        return out
-    }
-
-    private static func resolveOneFlat(_ url: URL) async -> FlatResolved {
-        let base = url.deletingPathExtension().lastPathComponent
-        let tags = await readTags(url)
-        if let a = tags.artist, !a.isEmpty {
-            return FlatResolved(url: url, artist: a,
-                                album: tags.album ?? "Singles",
-                                title: (tags.title?.isEmpty == false ? tags.title! : base))
-        }
-        if let (a, t) = splitArtistTitle(base) {
-            return FlatResolved(url: url, artist: a, album: tags.album ?? "Singles", title: t)
-        }
-        return FlatResolved(url: url, artist: "Unknown Artist",
-                            album: tags.album ?? "Unknown Album",
-                            title: (tags.title?.isEmpty == false ? tags.title! : base))
-    }
-
-    /// Read the common artist/album/title tags via AVFoundation (best-effort).
-    private static func readTags(_ url: URL) async -> (artist: String?, album: String?, title: String?) {
+    /// Extract and cache a file's embedded cover; returns the cached file path.
+    private static func embeddedArtwork(_ url: URL) async -> String? {
         let asset = AVURLAsset(url: url)
-        guard let items = try? await asset.load(.commonMetadata) else { return (nil, nil, nil) }
+        guard let items = try? await asset.load(.commonMetadata),
+              let item = AVMetadataItem.metadataItems(from: items, filteredByIdentifier: .commonIdentifierArtwork).first,
+              let data = (try? await item.load(.dataValue)) ?? nil else { return nil }
+        return await ArtworkCache.shared.storeEmbedded(data, key: url.path)
+    }
+
+    /// Read common artist/album/title tags plus embedded artwork (best-effort).
+    private static func readTagsAndArt(_ url: URL)
+        async -> ((artist: String?, album: String?, title: String?), String?) {
+        let asset = AVURLAsset(url: url)
+        guard let items = try? await asset.load(.commonMetadata) else { return ((nil, nil, nil), nil) }
         func value(_ id: AVMetadataIdentifier) async -> String? {
             guard let item = AVMetadataItem.metadataItems(from: items, filteredByIdentifier: id).first else { return nil }
             return (try? await item.load(.stringValue)) ?? nil
         }
-        return (await value(.commonIdentifierArtist),
-                await value(.commonIdentifierAlbumName),
-                await value(.commonIdentifierTitle))
+        let artist = await value(.commonIdentifierArtist)
+        let album = await value(.commonIdentifierAlbumName)
+        let title = await value(.commonIdentifierTitle)
+        var artPath: String?
+        if let art = AVMetadataItem.metadataItems(from: items, filteredByIdentifier: .commonIdentifierArtwork).first,
+           let data = (try? await art.load(.dataValue)) ?? nil {
+            artPath = await ArtworkCache.shared.storeEmbedded(data, key: url.path)
+        }
+        return ((artist, album, title), artPath)
     }
 
     /// "Artist - Title" → ("Artist", "Title"), splitting on the first " - ".

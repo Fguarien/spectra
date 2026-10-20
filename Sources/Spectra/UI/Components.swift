@@ -35,6 +35,25 @@ struct ArtworkView: View {
     }
 }
 
+/// Album artwork that prefers the embedded/folder/server image and, when a local
+/// album has none, fetches a square cover from the web (iTunes) once, lazily.
+struct AlbumArtwork: View {
+    @EnvironmentObject var model: AppModel
+    let item: PlexMetadata
+    let side: CGFloat
+    @State private var remote: URL?
+
+    private var localURL: URL? { model.imageURL(item.thumb, size: Int(side * 3)) }
+
+    var body: some View {
+        ArtworkView(url: localURL ?? remote, side: side)
+            .task(id: item.ratingKey) {
+                guard localURL == nil, remote == nil else { return }
+                remote = await model.remoteCover(for: item)
+            }
+    }
+}
+
 /// Right-click actions shared by every track row: play next, queue, rate,
 /// add to a playlist, download / remove download.
 struct TrackMenu: View {

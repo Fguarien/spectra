@@ -40,10 +40,33 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("Account") {
-                LabeledContent("Server", value: model.serverName)
-                LabeledContent("Local library", value: "\(AppDatabase.shared.trackCount()) tracks, \(AppDatabase.shared.tags().count) tags")
-                Button("Sign out", role: .destructive) { model.signOut() }
+            Section("Accounts") {
+                ForEach(model.accounts) { acc in
+                    HStack(spacing: 10) {
+                        Image(systemName: acc.kind.systemImage).foregroundStyle(.secondary).frame(width: 18)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(acc.name)
+                            Text(acc.id == model.activeAccountID ? "\(acc.kind.label) · active" : acc.kind.label)
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if acc.id == model.activeAccountID {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint)
+                        } else {
+                            Button("Switch") { model.switchAccount(acc.id) }.buttonStyle(.borderless)
+                        }
+                        Button(role: .destructive) { model.removeAccount(acc.id) } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+                HStack {
+                    Button("Add Plex…") { model.startLink() }
+                    Button("Add Local Folder…") { model.promptAddLocalFolder() }
+                    Button("Add YouTube Music") { model.addYouTubeMusicAccount() }
+                }
+                .buttonStyle(.bordered).controlSize(.small)
             }
         }
         .formStyle(.grouped)

@@ -76,11 +76,11 @@ struct LibraryView: View {
 
 struct AlbumRow: View {
     let album: PlexMetadata
-    let imageURL: URL?
+    var imageURL: URL? = nil      // retained for callers; AlbumArtwork handles the fallback
 
     var body: some View {
         HStack {
-            ArtworkView(url: imageURL, side: 40)
+            AlbumArtwork(item: album, side: 40)
             VStack(alignment: .leading) {
                 Text(album.title)
                 if let year = album.year {
@@ -121,7 +121,7 @@ struct TrackListView: View {
 
     private func header(_ album: PlexMetadata) -> some View {
         HStack(spacing: 14) {
-            ArtworkView(url: model.imageURL(album.thumb, size: 160), side: 88)
+            AlbumArtwork(item: album, side: 88)
             VStack(alignment: .leading, spacing: 4) {
                 Text(album.title).font(.title3).fontWeight(.semibold)
                 Text(album.parentTitle ?? "").foregroundStyle(.secondary)

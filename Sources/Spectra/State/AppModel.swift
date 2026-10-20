@@ -107,6 +107,23 @@ final class AppModel: ObservableObject {
         connect(account: account)
     }
 
+    /// Remove any account by id. If it was the active one, reconnect to the next
+    /// remaining account, or drop to the sign-in screen.
+    func removeAccount(_ id: String) {
+        let wasActive = (id == activeAccountID)
+        AccountStore.shared.remove(id)   // also repoints activeID if needed
+        if wasActive {
+            AudioPlayer.shared.onTimeline = nil
+            provider = nil
+            artists = []; playlists = []; searchHits = []; similarArtists = []; serverName = ""
+        }
+        refreshAccounts()
+        if wasActive {
+            if let next = AccountStore.shared.activeAccount { connect(account: next) }
+            else { phase = .signedOut }
+        }
+    }
+
     /// Remove the active account; switch to another if one remains, else sign out.
     func signOut() {
         if let id = activeAccountID { AccountStore.shared.remove(id) }
@@ -315,6 +332,15 @@ final class AppModel: ObservableObject {
 
     func imageURL(_ thumb: String?, size: Int = 300) -> URL? {
         provider?.artworkURL(thumb, size: size)
+    }
+
+    /// Square cover from the web (iTunes, no key) for a local album that has no
+    /// embedded/folder artwork. Returns nil for other providers or junk names.
+    func remoteCover(for item: PlexMetadata) async -> URL? {
+        guard provider?.kind == .local, item.type == "album" else { return nil }
+        let artist = item.grandparentTitle ?? item.parentTitle ?? ""
+        guard !artist.isEmpty, !["Singles", "Unknown Album"].contains(item.title) else { return nil }
+        return await ArtworkCache.shared.remoteCover(artist: artist, title: item.title, isAlbum: true)
     }
 
     // MARK: offline playback
