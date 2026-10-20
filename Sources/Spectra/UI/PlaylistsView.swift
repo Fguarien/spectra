@@ -6,12 +6,30 @@ import SwiftUI
 struct PlaylistsView: View {
     @EnvironmentObject var model: AppModel
     @State private var selected: PlexMetadata?
+    @State private var selectedLocal: LocalPlaylist?
     @State private var tracks: [PlexMetadata] = []
 
     var body: some View {
         NavigationSplitView {
             List {
-                Section("Plex Playlists") {
+                Section("Spectra") {
+                    ForEach(model.localPlaylists) { pl in
+                        Label {
+                            VStack(alignment: .leading) {
+                                Text(pl.name)
+                                Text("\(pl.count) tracks · all sources").font(.caption).foregroundStyle(.secondary)
+                            }
+                        } icon: { Image(systemName: pl.kind == "radio" ? "heart.circle" : "music.note.list") }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture { selected = nil; selectedLocal = pl; loadLocal(pl) }
+                        .listRowBackground(selectedLocal?.id == pl.id ? Color.accentColor.opacity(0.22) : Color.clear)
+                    }
+                    if model.localPlaylists.isEmpty {
+                        Text("Love a track (♥) to start Radio ♥").foregroundStyle(.secondary)
+                    }
+                }
+                Section("\(model.serverName.isEmpty ? "Account" : model.serverName) Playlists") {
                     ForEach(model.playlists) { pl in
                         Label {
                             VStack(alignment: .leading) {
@@ -21,7 +39,7 @@ struct PlaylistsView: View {
                         } icon: { Image(systemName: "music.note.list") }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
-                        .onTapGesture { selected = pl }
+                        .onTapGesture { selectedLocal = nil; selected = pl }
                         .listRowBackground(selected == pl ? Color.accentColor.opacity(0.22) : Color.clear)
                     }
                     if model.playlists.isEmpty { Text("None").foregroundStyle(.secondary) }
@@ -48,7 +66,43 @@ struct PlaylistsView: View {
     }
 
     @ViewBuilder private var detail: some View {
-        if let pl = selected {
+        if let pl = selectedLocal {
+            VStack(spacing: 0) {
+                HStack {
+                    Text(pl.name).font(.title2).fontWeight(.semibold)
+                    Spacer()
+                    Button { model.play(tracks, startAt: 0) } label: { Label("Play", systemImage: "play.fill") }
+                        .disabled(tracks.isEmpty)
+                    Button { model.downloadAll(tracks) } label: { Label("Download", systemImage: "arrow.down.circle") }
+                        .disabled(tracks.isEmpty)
+                    Button(role: .destructive) {
+                        model.deleteLocalPlaylist(pl); selectedLocal = nil; tracks = []
+                    } label: { Label("Delete", systemImage: "trash") }
+                }
+                .padding(16)
+                List {
+                    ForEach(Array(tracks.enumerated()), id: \.element.id) { pair in
+                        HStack {
+                            TrackRow(index: pair.offset, track: pair.element,
+                                     albumTitle: pair.element.parentTitle ?? "",
+                                     artist: pair.element.grandparentTitle ?? "")
+                            Text(pair.element.grandparentTitle ?? "").font(.caption).foregroundStyle(.secondary)
+                            SourceBadges(rows: [pair.element])
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture { model.play(tracks, startAt: pair.offset) }
+                        .contextMenu {
+                            TrackMenu(track: pair.element, albumTitle: pair.element.parentTitle ?? "",
+                                      artist: pair.element.grandparentTitle ?? "")
+                            Divider()
+                            Button("Remove from \(pl.name)") {
+                                model.removeFromLocalPlaylist(pl, pair.element); loadLocal(pl)
+                            }
+                        }
+                    }
+                }
+            }
+        } else if let pl = selected {
             VStack(spacing: 0) {
                 HStack {
                     Text(pl.title).font(.title2).fontWeight(.semibold)
@@ -82,8 +136,12 @@ struct PlaylistsView: View {
         }
     }
 
+    private func loadLocal(_ pl: LocalPlaylist) {
+        tracks = model.localPlaylistTracks(pl)
+    }
+
     private func load(_ pl: PlexMetadata?) {
-        guard let pl else { tracks = []; return }
+        guard let pl else { if selectedLocal == nil { tracks = [] }; return }
         Task { tracks = await model.playlistTracks(pl) }
     }
 }

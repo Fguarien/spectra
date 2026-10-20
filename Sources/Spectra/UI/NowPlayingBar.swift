@@ -17,7 +17,10 @@ struct NowPlayingBar: View {
                 Text(player.current.map { [$0.artist, $0.album].filter { !$0.isEmpty }.joined(separator: " — ") } ?? "")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 if player.current != nil {
-                    StarRatingView(rating: player.current?.userRating ?? 0, compact: true) { model.rateCurrent(stars: $0) }
+                    HStack(spacing: 8) {
+                        StarRatingView(rating: player.current?.userRating ?? 0, compact: true) { model.rateCurrent(stars: $0) }
+                        HeartButton()
+                    }
                 }
             }
             .frame(width: 200, alignment: .leading)

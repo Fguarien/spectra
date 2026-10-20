@@ -64,6 +64,7 @@ struct TrackMenu: View {
 
     var body: some View {
         Button("Play") { model.play([track], startAt: 0, albumTitle: albumTitle, artist: artist) }
+        Button(model.isLiked(track) ? "Unlove ♥" : "Love ♥") { model.toggleLike(track) }
         Button("Play Next") { model.enqueue(track, albumTitle: albumTitle, artist: artist, playNext: true) }
         Button("Add to Queue") { model.enqueue(track, albumTitle: albumTitle, artist: artist, playNext: false) }
         Divider()
@@ -105,4 +106,25 @@ func durationText(_ ms: Int?) -> String {
     guard let ms else { return "" }
     let s = ms / 1000
     return String(format: "%d:%02d", s / 60, s % 60)
+}
+
+/// ♥ for the track that's playing: loving it grows the « Radio ♥ » playlist.
+struct HeartButton: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject private var player = AudioPlayer.shared
+    var font: Font = .body
+    var tint: Color? = nil
+
+    var body: some View {
+        let _ = model.likesVersion   // redraw on toggle
+        let liked = model.isLikedCurrent()
+        Button { model.toggleLikeCurrent() } label: {
+            Image(systemName: liked ? "heart.fill" : "heart")
+                .foregroundStyle(liked ? AnyShapeStyle(Color.pink) : (tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary)))
+        }
+        .font(font)
+        .buttonStyle(.borderless)
+        .disabled(player.current == nil)
+        .help(liked ? "Unlove" : "Love — grows the Radio ♥ playlist")
+    }
 }

@@ -26,7 +26,10 @@ struct NowPlayingView: View {
                     }
                 }
                 if player.current != nil {
-                    StarRatingView(rating: player.current?.userRating ?? 0, compact: false) { model.rateCurrent(stars: $0) }
+                    HStack(spacing: 14) {
+                        StarRatingView(rating: player.current?.userRating ?? 0, compact: false) { model.rateCurrent(stars: $0) }
+                        HeartButton(font: .title2)
+                    }
                     TransportButtons(size: .title)
                 }
                 Spacer(minLength: 0)

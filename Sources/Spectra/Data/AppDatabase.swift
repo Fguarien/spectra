@@ -68,6 +68,35 @@ final class AppDatabase {
             try db.create(indexOn: "trackTag", columns: ["tagName"])
             try db.create(indexOn: "track", columns: ["ratingKey"])
         }
+        // v1.14: ♥ likes and Spectra-local playlists (multi-source). Rows keep
+        // the full PlexMetadata as JSON so they play from their own account and
+        // can be re-resolved by artist/title if that account disappears.
+        m.registerMigration("v3-likes-local-playlists") { db in
+            try db.create(table: "liked") { t in
+                t.column("key", .text).primaryKey()          // normalised "artist|title"
+                t.column("accountID", .text)
+                t.column("title", .text).notNull()
+                t.column("artist", .text)
+                t.column("meta", .text).notNull()
+                t.column("likedAt", .datetime).notNull()
+            }
+            try db.create(table: "localPlaylist") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text).notNull()
+                t.column("kind", .text).notNull().defaults(to: "manual")   // manual | radio
+                t.column("createdAt", .datetime).notNull()
+            }
+            try db.create(table: "localPlaylistItem") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("playlistID", .integer).notNull().references("localPlaylist", onDelete: .cascade)
+                t.column("position", .integer).notNull()
+                t.column("key", .text).notNull()
+                t.column("title", .text).notNull()
+                t.column("artist", .text)
+                t.column("meta", .text).notNull()
+                t.uniqueKey(["playlistID", "key"])
+            }
+        }
         return m
     }
 

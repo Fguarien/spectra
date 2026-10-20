@@ -187,6 +187,32 @@ final class LastFM: ObservableObject {
         status = nil
     }
 
+    // MARK: similar tracks (Radio ♥)
+
+    struct Similar { let artist: String; let title: String }
+
+    /// `track.getSimilar`, falling back to the top tracks of `artist.getSimilar`
+    /// when Last.fm has no track-level data (frequent for recent releases).
+    func similarTracks(artist: String, title: String, limit: Int) async -> [Similar] {
+        if let j = try? await call("track.getSimilar",
+                                   ["artist": artist, "track": title, "limit": String(limit), "autocorrect": "1"], post: false),
+           let list = (j["similartracks"] as? [String: Any])?["track"] as? [[String: Any]], !list.isEmpty {
+            return list.compactMap { t in
+                guard let name = t["name"] as? String, let a = (t["artist"] as? [String: Any])?["name"] as? String else { return nil }
+                return Similar(artist: a, title: name)
+            }
+        }
+        guard let j = try? await call("artist.getSimilar", ["artist": artist, "limit": "10", "autocorrect": "1"], post: false),
+              let artists = (j["similarartists"] as? [String: Any])?["artist"] as? [[String: Any]] else { return [] }
+        var out: [Similar] = []
+        for a in artists.compactMap({ $0["name"] as? String }) {
+            guard let tj = try? await call("artist.getTopTracks", ["artist": a, "limit": "5"], post: false),
+                  let tracks = (tj["toptracks"] as? [String: Any])?["track"] as? [[String: Any]] else { continue }
+            out += tracks.compactMap { ($0["name"] as? String).map { Similar(artist: a, title: $0) } }
+        }
+        return out
+    }
+
     // MARK: transport
 
     enum LastFMError: LocalizedError {

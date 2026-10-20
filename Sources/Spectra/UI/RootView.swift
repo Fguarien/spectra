@@ -30,6 +30,7 @@ struct RootView: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) { GlobalSearchField() }
             }
+            .overlay(alignment: .bottomTrailing) { RadioToast().padding(.bottom, 86).padding(.trailing, 16) }
         case .error(let message):
             VStack(spacing: 16) {
                 Image(systemName: "exclamationmark.triangle").font(.largeTitle)
@@ -127,5 +128,20 @@ struct GlobalSearchField: View {
         .padding(.horizontal, 8).padding(.vertical, 4)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
         .frame(width: 260)
+    }
+}
+
+/// Progress / result of a Radio ♥ build, floating above the transport bar.
+struct RadioToast: View {
+    @ObservedObject private var radio = RadioBuilder.shared
+
+    var body: some View {
+        if let s = radio.status {
+            Label(s, systemImage: "heart.fill")
+                .font(.callout)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(.regularMaterial, in: Capsule())
+                .transition(.opacity)
+        }
     }
 }

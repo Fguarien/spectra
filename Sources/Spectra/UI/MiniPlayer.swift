@@ -8,6 +8,7 @@ import AppKit
 final class MiniPlayer {
     static let shared = MiniPlayer()
     private var panel: NSPanel?
+    weak var model: AppModel?   // for ♥ (set at bootstrap)
     private let side: CGFloat = 220
 
     func toggle() {
@@ -16,6 +17,7 @@ final class MiniPlayer {
     }
 
     private func show() {
+        guard let model else { return }
         if panel == nil {
             let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: side, height: side),
                             styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
@@ -29,7 +31,7 @@ final class MiniPlayer {
             p.hasShadow = true
             p.contentView = NSHostingView(rootView: MiniPlayerView(side: side) { [weak self] in
                 self?.panel?.orderOut(nil)
-            })
+            }.environmentObject(model))
             // Remembers where the user left it across launches.
             if !p.setFrameUsingName("SpectraMiniPlayer") {
                 if let screen = NSScreen.main?.visibleFrame {
@@ -65,7 +67,11 @@ struct MiniPlayerView: View {
                     Text(player.current?.title ?? "Not playing")
                         .font(.headline).lineLimit(1)
                     Text(player.current?.artist ?? "").font(.caption).lineLimit(1).opacity(0.85)
-                    TransportButtons(size: .title2).padding(.top, 8)
+                    HStack(spacing: 14) {
+                        TransportButtons(size: .title2)
+                        HeartButton(font: .title2, tint: .white)
+                    }
+                    .padding(.top, 8)
                 }
                 .foregroundStyle(.white)
                 .padding(12)

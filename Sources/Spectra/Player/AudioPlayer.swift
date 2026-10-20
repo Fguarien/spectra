@@ -18,6 +18,7 @@ struct PlayableTrack: Identifiable, Equatable {
     var sourceAccountID: String? = nil   // account whose provider serves it
     var sourceKind: ProviderKind? = nil  // nil = offline download
     var largeArtworkURL: URL? = nil      // Now Playing / mini player
+    var meta: PlexMetadata? = nil        // source row (♥, radio, re-resolution)
 
     static func == (l: PlayableTrack, r: PlayableTrack) -> Bool { l.id == r.id && l.url == r.url }
 }

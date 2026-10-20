@@ -43,6 +43,10 @@ final class AppModel: ObservableObject {
     func bootstrap() {
         TrackNotifier.shared.requestAuthIfNeeded()
         LastFM.shared.start()
+        RadioBuilder.shared.model = self
+        MiniPlayer.shared.model = self
+        RadioBuilder.shared.start()
+        reloadLocalPlaylists()
         DownloadManager.shared.resume = { [weak self] m in self?.download(m) ?? false }
         DownloadManager.shared.migrateLegacyDownloads()
         startBackups()
@@ -450,7 +454,8 @@ final class AppModel: ObservableObject {
             userRating: rating(m.ratingKey) ?? m.userRating.map { Int($0 / 2) },
             sourceAccountID: m.sourceAccountID ?? activeAccountID,
             sourceKind: account(for: m)?.kind,
-            largeArtworkURL: provider(for: m)?.artworkURL(m.thumb, size: 1200)
+            largeArtworkURL: provider(for: m)?.artworkURL(m.thumb, size: 1200),
+            meta: m.sourceAccountID == nil ? m.tagged(activeAccountID) : m
         )
     }
 
@@ -474,7 +479,9 @@ final class AppModel: ObservableObject {
     func play(_ list: [PlexMetadata], startAt index: Int, albumTitle: String = "", artist: String = "") {
         guard !list.isEmpty else { return }
         let start = min(max(index, 0), list.count - 1)
-        if provider(for: list[start])?.capabilities.resolvesStreamLazily == true {
+        // A mixed-source list (Radio ♥: Local + YouTube) takes the async path as
+        // soon as one track needs it; the sync path would silently drop those.
+        if list[start...].contains(where: { provider(for: $0)?.capabilities.resolvesStreamLazily == true }) {
             // Each URL is a network call: play the chosen track first (instant
             // start), then resolve the rest from there and append in order.
             let slice = Array(list[start...])
@@ -537,6 +544,73 @@ final class AppModel: ObservableObject {
         }
         guard !playables.isEmpty else { return }
         AudioPlayer.shared.play(tracks: playables, startAt: min(index, playables.count - 1))
+    }
+
+    // MARK: ♥ likes, local playlists, Radio ♥
+
+    @Published private(set) var localPlaylists: [LocalPlaylist] = []
+    @Published private(set) var likesVersion = 0     // bumps so ♥ buttons redraw
+
+    func reloadLocalPlaylists() { localPlaylists = AppDatabase.shared.localPlaylists() }
+
+    func isLiked(_ m: PlexMetadata) -> Bool { AppDatabase.shared.isLiked(artist: m.grandparentTitle, title: m.title) }
+
+    func isLikedCurrent() -> Bool {
+        guard let t = AudioPlayer.shared.current else { return false }
+        return AppDatabase.shared.isLiked(artist: t.artist, title: t.title)
+    }
+
+    /// Love / un-love; loving grows the « Radio ♥ » playlist in the background.
+    func toggleLike(_ m: PlexMetadata) {
+        let row = m.sourceAccountID == nil ? m.tagged(activeAccountID) : m
+        let liked = AppDatabase.shared.toggleLike(row)
+        likesVersion += 1
+        if liked { RadioBuilder.shared.grow(from: row) }
+    }
+
+    func toggleLikeCurrent() {
+        guard let t = AudioPlayer.shared.current else { return }
+        let m = t.meta ?? PlexMetadata(ratingKey: t.id, title: t.title, type: "track",
+                                       parentTitle: t.album, grandparentTitle: t.artist,
+                                       duration: t.durationMs)
+        toggleLike(m)
+    }
+
+    func localPlaylistTracks(_ p: LocalPlaylist) -> [PlexMetadata] { AppDatabase.shared.localPlaylistTracks(p.id) }
+
+    func deleteLocalPlaylist(_ p: LocalPlaylist) {
+        AppDatabase.shared.deleteLocalPlaylist(p.id)
+        reloadLocalPlaylists()
+    }
+
+    func removeFromLocalPlaylist(_ p: LocalPlaylist, _ m: PlexMetadata) {
+        AppDatabase.shared.removeFromLocalPlaylist(p.id, track: m)
+        reloadLocalPlaylists()
+    }
+
+    /// Find a song by artist + title in the user's sources, best source first
+    /// (Local files, then Plex, then YouTube Music). Nil if nowhere.
+    func findSong(artist: String, title: String) async -> PlexMetadata? {
+        let wantArtist = MergedArtist.normalise(artist)
+        let wantTitle = MergedArtist.normalise(title)
+        let rank: [ProviderKind: Int] = [.local: 0, .plex: 1, .youtubeMusic: 2]
+        let ordered = accounts.filter { poolConnected.contains($0.id) }
+            .sorted { (rank[$0.kind] ?? 9) < (rank[$1.kind] ?? 9) }
+        for acc in ordered {
+            guard let p = pool[acc.id],
+                  let hubs = try? await p.search("\(artist) \(title)") else { continue }
+            let tracks = hubs.filter { ($0.type ?? "") == "track" || ($0.title ?? "").lowercased().contains("song") }
+                .flatMap(\.items)
+            if let hit = tracks.first(where: { t in
+                let a = MergedArtist.normalise(t.grandparentTitle ?? "")
+                let n = MergedArtist.normalise(t.title)
+                return (a == wantArtist || a.contains(wantArtist) || wantArtist.contains(a)) && !a.isEmpty
+                    && (n == wantTitle || n.hasPrefix(wantTitle))
+            }) {
+                return hit.tagged(acc.id)
+            }
+        }
+        return nil
     }
 
     // MARK: database backups on the NAS
