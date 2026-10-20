@@ -1,15 +1,15 @@
 import Foundation
 
 /// Where Spectra keeps files the user owns: downloaded music, cover art and
-/// database backups. Default root `/Volumes/music/Spectra` — the NAS `music`
-/// share (SMB), which `~/Music` points at.
+/// database backups. Default root `~/Music/Spectra`; Settings → Storage can
+/// point it at a NAS share instead (e.g. `/Volumes/music/Spectra`).
 ///
 /// The trap this guards against: when the share is NOT mounted,
 /// `/Volumes/music` can still be created as a plain local folder, and every
 /// write would silently land on the Mac's disk. A root under `/Volumes/<x>`
 /// is therefore only "available" if `/Volumes/<x>` is a real mount point.
 enum Storage {
-    static let defaultRoot = "/Volumes/music/Spectra"
+    static let defaultRoot = (NSHomeDirectory() as NSString).appendingPathComponent("Music/Spectra")
     private static let key = "storage.root"
 
     static var root: URL {

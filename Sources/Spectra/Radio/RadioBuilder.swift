@@ -2,15 +2,16 @@ import Foundation
 
 /// « Radio ♥ » — loving a track grows a Spectra-local playlist:
 /// 1. Last.fm `track.getSimilar` gives ~50 candidates (free);
-/// 2. a small LOCAL model behind LiteLLM (`cheap-model-ollama`, $0) drops
-///    duplicates / remixes / live takes and orders the flow — if it fails or
-///    answers badly, the raw Last.fm order is used instead;
+/// 2. optionally, a model behind any OpenAI-compatible endpoint (Settings →
+///    Radio ♥: LiteLLM, Ollama, OpenAI…) drops duplicates / remixes / live
+///    takes and orders the flow — if none is set, it fails or answers badly,
+///    the raw Last.fm order is used instead;
 /// 3. each pick is found in the user's sources (Local > Plex > YouTube Music);
 /// 4. found tracks are appended, deduplicated, to the « Radio ♥ » playlist.
 ///
-/// The LiteLLM key is a virtual key allowed on that one alias, with a $1/30 d
-/// circuit breaker (`00-infra/scripts/litellm-cle-spectra.sh`). It arrives via
-/// a one-shot provisioning file, imported into the Keychain then deleted.
+/// The endpoint key lives in the Keychain only. It arrives via a one-shot
+/// provisioning file (see `importProvisioningFile`), imported then deleted —
+/// best scoped to a single cheap model with a small budget.
 @MainActor
 final class RadioBuilder: ObservableObject {
     static let shared = RadioBuilder()
@@ -28,8 +29,14 @@ final class RadioBuilder: ObservableObject {
     @Published private(set) var status: String?
     weak var model: AppModel?
 
-    private let endpoint = URL(string: "https://litellm.savethemall.eu/v1/chat/completions")!
-    private let alias = "cheap-model-ollama"
+    /// OpenAI-compatible chat-completions URL, e.g.
+    /// `http://localhost:4000/v1/chat/completions`. Empty = no LLM step.
+    @Published var llmEndpoint: String = UserDefaults.standard.string(forKey: "radio.llmEndpoint") ?? "" {
+        didSet { UserDefaults.standard.set(llmEndpoint, forKey: "radio.llmEndpoint") }
+    }
+    @Published var llmModel: String = UserDefaults.standard.string(forKey: "radio.llmModel") ?? "" {
+        didSet { UserDefaults.standard.set(llmModel, forKey: "radio.llmModel") }
+    }
     private let keyAccount = "litellm.key"
 
     func start() { importProvisioningFile() }
@@ -109,7 +116,9 @@ final class RadioBuilder: ObservableObject {
 
     /// Indices into `candidates`, best flow first; nil on any failure.
     private func llmPicks(seed: String, candidates: [LastFM.Similar], count maxPicks: Int) async -> [Int]? {
-        guard let key = Keychain.get(account: keyAccount) else { return nil }
+        guard let endpoint = URL(string: llmEndpoint.trimmingCharacters(in: .whitespaces)),
+              endpoint.scheme?.hasPrefix("http") == true, !llmModel.isEmpty,
+              let key = Keychain.get(account: keyAccount) else { return nil }
         let list = candidates.enumerated().map { "\($0.offset). \($0.element.artist) — \($0.element.title)" }
             .joined(separator: "\n")
         let likes = AppDatabase.shared.recentLikes(limit: 10).joined(separator: "\n")
@@ -121,7 +130,7 @@ final class RadioBuilder: ObservableObject {
             """
         let user = "Seed: \(seed)\n\nRecently loved:\n\(likes.isEmpty ? "(none)" : likes)\n\nCandidates:\n\(list)"
         let body: [String: Any] = [
-            "model": alias, "temperature": 0.2,
+            "model": llmModel, "temperature": 0.2,
             "response_format": ["type": "json_object"],
             "messages": [["role": "system", "content": system], ["role": "user", "content": user]],
         ]

@@ -4,6 +4,7 @@ import AppKit
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var theme = ThemeManager.shared
+    @State private var storageRoot = Storage.root.path
     @AppStorage("notifyOnTrackChange") private var notifyOnTrackChange = true
     @ObservedObject private var lastfm = LastFM.shared
     @ObservedObject private var radio = RadioBuilder.shared
@@ -34,8 +35,17 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("Storage (NAS)") {
-                LabeledContent("Folder", value: Storage.root.path)
+            Section("Storage") {
+                LabeledContent("Folder") {
+                    HStack {
+                        Text(storageRoot).textSelection(.enabled)
+                        Button("Choose…") {
+                            let p = NSOpenPanel()
+                            p.canChooseDirectories = true; p.canChooseFiles = false; p.canCreateDirectories = true
+                            if p.runModal() == .OK, let url = p.url { Storage.root = url; storageRoot = url.path }
+                        }
+                    }
+                }
                 LabeledContent("Status", value: Storage.isAvailable ? "Mounted" : "Not mounted — downloads wait")
                 Text("Downloads go to Music/<Artist>/<Album>/ with a cover.jpg; cover art cache and database backups live here too. The live database stays on this Mac (SQLite over SMB can corrupt); a consistent copy is saved hourly and on quit, 48 kept.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -52,7 +62,10 @@ struct SettingsView: View {
                     ForEach(RadioBuilder.lengths, id: \.self) { Text("\($0)").tag($0) }
                 }
                 .pickerStyle(.segmented)
-                Text("Loving a track (♥) creates the playlist “Radio ♥ — <title>”: the loved track, then similar ones from Last.fm, curated by a local model and found in your sources (Local, Plex, YouTube Music).")
+                TextField("LLM endpoint (optional)", text: $radio.llmEndpoint,
+                          prompt: Text("http://localhost:4000/v1/chat/completions"))
+                TextField("Model", text: $radio.llmModel, prompt: Text("e.g. llama3.2"))
+                Text("Loving a track (♥) creates the playlist “Radio ♥ — <title>”: the loved track, then similar ones from Last.fm, optionally curated by a model behind any OpenAI-compatible endpoint, and found in your sources (Local, Plex, YouTube Music).")
                     .font(.caption).foregroundStyle(.secondary)
             }
 

@@ -94,7 +94,7 @@ struct SpectraCommands: Commands {
     @MainActor private static func showAbout() {
         NSApplication.shared.orderFrontStandardAboutPanel(options: [
             .credits: NSAttributedString(
-                string: "Native macOS client for Plex music. Original code — reimplemented against Plex’s public HTTP API.",
+                string: "Native macOS music player for Plex, local files and YouTube Music. Original code, MIT licence.",
                 attributes: [.font: NSFont.systemFont(ofSize: 11)]
             )
         ])

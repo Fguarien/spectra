@@ -1,6 +1,6 @@
 # Spectra
 
-A native macOS (Intel x86_64) music player for a Plex Media Server, written in
+A native macOS music player (Plex, local folders, YouTube Music), written in
 Swift/SwiftUI. Original code — not derived from any proprietary binary; it
 reimplements, against the public Plex HTTP API, the behaviour of a Plex music
 client and migrates a user's own data from a Prism `Items.db` export.
@@ -21,6 +21,8 @@ The app icon (a prism splitting white light) is generated reproducibly by
 
 ## Layout
 
+- `Sources/Spectra/Providers/` — `MusicProvider` protocol + Plex, local-files
+  and YouTube Music providers; `catalog()` lists a whole source.
 - `Sources/Spectra/Plex/` — plex.tv PIN auth, server discovery, library API,
   search, playlists, ratings, stream + universal-transcode URLs.
 - `Sources/Spectra/Player/` — AVQueuePlayer gapless engine (shuffle/repeat/
@@ -39,16 +41,22 @@ The app icon (a prism splitting white light) is generated reproducibly by
 - The Plex account token is a secret: stored only in the macOS Keychain, never
   on disk in cleartext, never logged.
 
-## Status — complete clone
+## Status
 
-Delivered: Plex link auth, server discovery, artist/album/track browse,
-streaming playback, system Now-Playing + remote commands, Plex scrobble,
-Prism import (tracks, plays, tags, similar artists, playlists); star ratings
-(local + Plex `/:/rate`), playlists (read/play/delete/add + recreate imported
-Prism ones), server-side search, similar artists, offline downloads + local
-playback, Auto/Light/Dark themes with accent + text size, universal-transcode
-fallback for `ape` and other non-AVFoundation codecs, gapless queue with
-shuffle / repeat / reorder / remove / jump, app icon, `/Applications` install.
+v2.x — Music.app-style window over a merged, cached library from several
+sources (Plex, local folders, YouTube Music): All Libraries + one Library row
+per source, grid/list views, Songs table with persisted columns, instant
+search, Spectra playlists, Radio ♥, queue + history, downloads, mini and
+full-screen players. User-facing documentation: `README.md` and the in-app
+help (`UI/HelpView.swift`) — keep both in step with features.
 
-Possible follow-ups (not required for parity): smart playlists, lyrics,
-sonic-analysis mixes, multi-server switching.
+## Conventions
+
+- Secrets (tokens, API keys) only in the Keychain (`Support/Keychain.swift`),
+  provisioned through one-shot JSON files that are imported then deleted.
+  Never in UserDefaults, the database, logs or argv.
+- Nothing environment-specific in the code: endpoints and paths are settings
+  with neutral defaults (`~/Music/Spectra`, no LLM endpoint).
+- Catalogue grouping runs off the main actor (`CatalogStore.build` is
+  `nonisolated static`); views read precomputed values, never re-normalise
+  thousands of strings per keystroke.

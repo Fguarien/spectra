@@ -9,8 +9,8 @@ import CryptoKit
 /// offline periods and restarts.
 ///
 /// Secrets: API key, shared secret and session key live in the Keychain only.
-/// The key pair arrives once through a provisioning file (written over SSH
-/// from OpenBao `externe/lastfm`), imported then deleted at launch.
+/// The key pair arrives once through a provisioning file (see
+/// `importProvisioningFile`), imported then deleted at launch.
 @MainActor
 final class LastFM: ObservableObject {
     static let shared = LastFM()
