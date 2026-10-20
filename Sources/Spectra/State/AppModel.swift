@@ -8,13 +8,39 @@ import AppKit
 @MainActor
 final class AppModel: ObservableObject {
     enum Phase { case signedOut, linking, loading, ready, error(String) }
-    enum Pane: Hashable { case nowPlaying, library, allSources, playlists, search, downloads, settings }
+    /// Sidebar destinations, Music.app layout (v2.0).
+    enum Pane: Hashable {
+        case recentlyAdded, artists, albums, songs, genres, downloads, search
+        case loved                                  // ♥ (Favourite Songs)
+        case playlist(PlexMetadata)                 // a source playlist
+        case localPlaylist(Int64)                   // Spectra playlist (Radio ♥…)
+    }
 
     @Published var phase: Phase = .signedOut
     @Published var linkCode: String?          // shown while the user approves in-browser
     @Published var serverName = ""
     @Published var statusLabel = "Connecting…"
-    @Published var pane: Pane = .library
+    @Published var pane: Pane = {
+        switch UserDefaults.standard.string(forKey: "sidebar.pane") {
+        case "recentlyAdded": return .recentlyAdded
+        case "artists": return .artists
+        case "songs": return .songs
+        case "genres": return .genres
+        default: return .albums
+        }
+    }() {
+        didSet {
+            let name: String? = switch pane {
+            case .recentlyAdded: "recentlyAdded"; case .artists: "artists"; case .albums: "albums"
+            case .songs: "songs"; case .genres: "genres"; default: nil
+            }
+            if let name { UserDefaults.standard.set(name, forKey: "sidebar.pane") }
+        }
+    }
+    /// Playlists of every connected account, by account ID.
+    @Published private(set) var poolPlaylists: [String: [PlexMetadata]] = [:]
+    /// Album opened from a grid (Music.app pushes a detail page).
+    @Published var openAlbum: CatalogAlbum?
     @Published var artists: [PlexMetadata] = []
     @Published var playlists: [PlexMetadata] = []
     @Published var searchHits: [SearchSection] = []
@@ -41,6 +67,8 @@ final class AppModel: ObservableObject {
     private let legacyTokenAccount = "plex.account.token"   // pre-multi-account key
 
     func bootstrap() {
+        // Grids draw hundreds of covers: keep them in the HTTP cache.
+        URLCache.shared = URLCache(memoryCapacity: 128 << 20, diskCapacity: 1 << 30)
         TrackNotifier.shared.requestAuthIfNeeded()
         LastFM.shared.start()
         RadioBuilder.shared.model = self
@@ -62,6 +90,11 @@ final class AppModel: ObservableObject {
 
         AccountStore.shared.migrateLegacyIfNeeded(legacyAccount: legacyTokenAccount)
         refreshAccounts()
+        CatalogStore.shared.load(accounts: accounts)
+        // Re-list each connected source once its copy is an hour old.
+        Timer.scheduledTimer(withTimeInterval: 900, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshCatalog(force: false) }
+        }
         if let active = AccountStore.shared.activeAccount {
             connect(account: active)
         } else {
@@ -69,8 +102,35 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Re-list every connected source (forced from View → Refresh Library).
+    func refreshCatalog(force: Bool) {
+        for (id, p) in pool where poolConnected.contains(id) {
+            if force { CatalogStore.shared.refresh(accountID: id, provider: p) }
+            else { CatalogStore.shared.refreshIfStale(accountID: id, provider: p) }
+        }
+    }
+
+    /// Every playlist of every source, in account order.
+    var allPlaylists: [PlexMetadata] { accounts.flatMap { poolPlaylists[$0.id] ?? [] } }
+
+    /// Play from the merged library. A long list (Songs: thousands) is cut to
+    /// a window after the chosen song: streaming sources resolve each URL.
+    func play(catalog list: [CatalogTrack], startAt index: Int) {
+        guard list.indices.contains(index) else { return }
+        let lazy = list[index...].prefix(50).contains { provider(for: $0.meta)?.capabilities.resolvesStreamLazily == true }
+        let window = Array(list[index...].prefix(lazy ? 50 : 500))
+        play(window.map(\.meta), startAt: 0)
+    }
+
+    func shuffle(catalog list: [CatalogTrack]) {
+        guard !list.isEmpty else { return }
+        AudioPlayer.shared.shuffle = false
+        play(catalog: Array(list.shuffled().prefix(200)), startAt: 0)
+    }
+
     private func refreshAccounts() {
         accounts = AccountStore.shared.accounts
+        for a in accounts { CatalogStore.shared.kinds[a.id] = a.kind }
         activeAccountID = AccountStore.shared.activeAccount?.id
     }
 
@@ -237,6 +297,8 @@ final class AppModel: ObservableObject {
     }
 
     private func dropFromPool(_ id: String) {
+        CatalogStore.shared.forget(accountID: id)
+        poolPlaylists[id] = nil
         pool[id] = nil
         poolConnected.remove(id)
         poolStatus[id] = nil
@@ -245,6 +307,10 @@ final class AppModel: ObservableObject {
 
     private func setPoolArtists(_ id: String, _ list: [PlexMetadata]?) {
         poolArtists[id] = list
+        if list != nil, let p = pool[id] {
+            CatalogStore.shared.refreshIfStale(accountID: id, provider: p)
+            Task { poolPlaylists[id] = tag((try? await p.playlists()) ?? [], id) }
+        }
         mergedArtists = MergedArtist.merge(poolArtists, order: accounts.map(\.id))
     }
 
@@ -347,7 +413,11 @@ final class AppModel: ObservableObject {
 
     func reloadPlaylists() {
         let id = activeAccountID
-        Task { playlists = tag((try? await provider?.playlists()) ?? [], id) }
+        Task {
+            let list = tag((try? await provider?.playlists()) ?? [], id)
+            playlists = list
+            if let id { poolPlaylists[id] = list }
+        }
     }
 
     func playlistTracks(_ playlist: PlexMetadata) async -> [PlexMetadata] {
@@ -452,11 +522,11 @@ final class AppModel: ObservableObject {
             album: albumTitle.isEmpty ? (m.parentTitle ?? "") : albumTitle,
             url: url,
             durationMs: m.duration ?? 0,
-            artworkURL: provider(for: m)?.artworkURL(m.thumb, size: 300),
+            artworkURL: provider(for: m)?.artworkURL(m.thumb ?? m.parentThumb, size: 300),
             userRating: rating(m.ratingKey) ?? m.userRating.map { Int($0 / 2) },
             sourceAccountID: m.sourceAccountID ?? activeAccountID,
             sourceKind: account(for: m)?.kind,
-            largeArtworkURL: provider(for: m)?.artworkURL(m.thumb, size: 1200),
+            largeArtworkURL: provider(for: m)?.artworkURL(m.thumb ?? m.parentThumb, size: 1200),
             meta: m.sourceAccountID == nil ? m.tagged(activeAccountID) : m
         )
     }

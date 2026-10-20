@@ -97,6 +97,32 @@ final class AppDatabase {
                 t.uniqueKey(["playlistID", "key"])
             }
         }
+        // v2.0 — Music-style merged library: every track of every account,
+        // refreshed in the background, so Albums / Songs / Artists / Genres
+        // draw instantly and work while a source is offline. Part of the same
+        // file, hence of the hourly NAS backup.
+        m.registerMigration("v4-catalog") { db in
+            try db.create(table: "catalogTrack") { t in
+                t.column("accountID", .text).notNull()
+                t.column("ratingKey", .text).notNull()
+                t.column("title", .text).notNull()
+                t.column("artist", .text)
+                t.column("album", .text)
+                t.column("trackNo", .integer)
+                t.column("disc", .integer)
+                t.column("durationMs", .integer).notNull().defaults(to: 0)
+                t.column("year", .integer)
+                t.column("genre", .text)
+                t.column("addedAt", .double)
+                t.column("meta", .text).notNull()
+                t.primaryKey(["accountID", "ratingKey"])
+            }
+            try db.create(table: "catalogSync") { t in
+                t.column("accountID", .text).primaryKey()
+                t.column("syncedAt", .double).notNull()
+                t.column("count", .integer).notNull()
+            }
+        }
         return m
     }
 

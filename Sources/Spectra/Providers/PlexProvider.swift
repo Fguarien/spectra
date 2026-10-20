@@ -34,6 +34,23 @@ final class PlexProvider: MusicProvider {
         try await client.children(ratingKey: album.ratingKey)
     }
 
+    /// Whole section in two calls: tracks, then albums for genre / year / cover.
+    func catalog() async throws -> [PlexMetadata] {
+        guard let key = firstSectionKey else { return [] }
+        async let tracks = client.allItems(sectionKey: key, type: 10)
+        async let albums = client.allItems(sectionKey: key, type: 9)
+        let byAlbum = Dictionary((try await albums).map { ($0.ratingKey, $0) }, uniquingKeysWith: { a, _ in a })
+        return try await tracks.map { t in
+            var t = t
+            if let a = t.parentRatingKey.flatMap({ byAlbum[$0] }) {
+                if t.Genre == nil { t.Genre = a.Genre }
+                if t.parentYear == nil { t.parentYear = a.year }
+                if t.parentThumb == nil { t.parentThumb = a.thumb }
+            }
+            return t
+        }
+    }
+
     func playlists() async throws -> [PlexMetadata] { try await client.playlists() }
     func playlistItems(id: String) async throws -> [PlexMetadata] { try await client.playlistItems(id: id) }
     func search(_ query: String) async throws -> [HubContainerResponse.Hub] { try await client.search(query) }

@@ -21,10 +21,11 @@ final class ThemeManager: ObservableObject {
     }
 
     enum Accent: String, CaseIterable, Identifiable {
-        case indigo, teal, pink, orange, green, red, purple, blue
+        case music, indigo, teal, pink, orange, green, red, purple, blue
         var id: String { rawValue }
         var color: Color {
             switch self {
+            case .music: return Color(red: 0.98, green: 0.18, blue: 0.28)   // Music.app red
             case .indigo: return .indigo
             case .teal: return .teal
             case .pink: return .pink
@@ -64,7 +65,7 @@ final class ThemeManager: ObservableObject {
     private init() {
         let d = UserDefaults.standard
         appearance = Appearance(rawValue: d.string(forKey: "theme.appearance") ?? "auto") ?? .auto
-        accent = Accent(rawValue: d.string(forKey: "theme.accent") ?? "indigo") ?? .indigo
+        accent = Accent(rawValue: d.string(forKey: "theme.accent") ?? "music") ?? .music
         textSize = TextSize(rawValue: d.string(forKey: "theme.textSize") ?? "standard") ?? .standard
     }
 }

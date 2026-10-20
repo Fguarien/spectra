@@ -61,6 +61,20 @@ final class LocalFilesProvider: MusicProvider {
         index.tracksByAlbum[album.ratingKey] ?? []
     }
 
+    /// Every scanned file, dated by the file's creation (= when it entered the
+    /// folder), which is what « Recently Added » sorts on.
+    func catalog() async throws -> [PlexMetadata] {
+        let tracks = index.allTracks
+        return await Task.detached(priority: .utility) {
+            tracks.map { t in
+                var t = t
+                let v = try? URL(fileURLWithPath: t.ratingKey).resourceValues(forKeys: [.creationDateKey])
+                t.addedAt = v?.creationDate.map { Int($0.timeIntervalSince1970) }
+                return t
+            }
+        }.value
+    }
+
     // MARK: playlists / related — not supported for a plain folder (yet)
 
     func playlists() async throws -> [PlexMetadata] { [] }

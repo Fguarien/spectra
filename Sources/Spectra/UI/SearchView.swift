@@ -11,7 +11,7 @@ struct SearchView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if model.searchHits.isEmpty {
+                if model.searchHits.isEmpty && libraryAlbums.isEmpty && librarySongs.isEmpty {
                     VStack(spacing: 8) {
                         if model.searching {
                             ProgressView()
@@ -25,6 +25,23 @@ struct SearchView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
+                        if !libraryAlbums.isEmpty || !librarySongs.isEmpty {
+                            Section("In Your Library") {
+                                if !libraryAlbums.isEmpty {
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(alignment: .top, spacing: 16) {
+                                            ForEach(libraryAlbums) { AlbumCell(album: $0).frame(width: 140) }
+                                        }
+                                        .padding(.vertical, 6)
+                                    }
+                                }
+                                ForEach(Array(librarySongs.enumerated()), id: \.element.id) { i, t in
+                                    AlbumTrackRow(track: t, number: i + 1, striped: false)
+                                        .onTapGesture(count: 2) { model.play(catalog: librarySongs, startAt: i) }
+                                        .contextMenu { SongsMenu(tracks: [t], context: librarySongs) }
+                                }
+                            }
+                        }
                         ForEach(model.searchHits) { section in
                             Section {
                                 ForEach(section.items) { item in
@@ -39,6 +56,23 @@ struct SearchView: View {
                 }
             }
         }
+    }
+
+    // Matches in the merged library, shown first (instant, offline-safe).
+    private var needle: String { MergedArtist.normalise(model.searchQuery) }
+
+    private var libraryAlbums: [CatalogAlbum] {
+        let n = needle
+        guard n.count >= 2 else { return [] }
+        return Array(CatalogStore.shared.albums.lazy.filter {
+            MergedArtist.normalise($0.title).contains(n) || MergedArtist.normalise($0.artist).contains(n)
+        }.prefix(20))
+    }
+
+    private var librarySongs: [CatalogTrack] {
+        let n = needle
+        guard n.count >= 2 else { return [] }
+        return Array(CatalogStore.shared.tracks.lazy.filter { MergedArtist.normalise($0.title).contains(n) }.prefix(30))
     }
 
     @ViewBuilder private func hubRow(_ item: PlexMetadata, type: String) -> some View {

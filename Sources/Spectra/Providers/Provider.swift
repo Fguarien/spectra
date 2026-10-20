@@ -67,6 +67,10 @@ protocol MusicProvider: AnyObject {
     /// Original-quality URL for offline download (nil if not downloadable).
     func downloadURL(for m: PlexMetadata) -> URL?
     func artworkURL(_ thumb: String?, size: Int) -> URL?
+    /// Every track of the account, for the merged Music-style library. Rows
+    /// carry album (`parentTitle` / `parentRatingKey`), album artist
+    /// (`grandparentTitle`) and, when known, `addedAt`, genre and year.
+    func catalog() async throws -> [PlexMetadata]
 
     func rate(ratingKey: String, stars: Int) async throws
     func reportTimeline(ratingKey: String, state: String, timeMs: Int, durationMs: Int) async
@@ -80,6 +84,41 @@ extension MusicProvider {
     func resolveStreamURL(for m: PlexMetadata) async -> URL? { playableURL(for: m) }
     func downloadFile(for m: PlexMetadata, to dest: URL) async throws {
         throw ProviderError.notImplemented(kind)
+    }
+
+    /// Generic walk artist → albums → tracks, four albums at a time. Providers
+    /// with a flat listing (Plex, Local, YouTube Music) override it.
+    func catalog() async throws -> [PlexMetadata] {
+        var albums: [PlexMetadata] = []
+        for a in try await artists() {
+            albums += ((try? await self.albums(of: a)) ?? []).map { al in
+                var al = al
+                if al.grandparentTitle == nil {   // keep the artist for the tracks
+                    al = PlexMetadata(ratingKey: al.ratingKey, title: al.title, type: "album", thumb: al.thumb,
+                                      parentTitle: a.title, grandparentTitle: a.title, year: al.year)
+                }
+                return al
+            }
+        }
+        var out: [PlexMetadata] = []
+        var next = 0
+        try await withThrowingTaskGroup(of: [PlexMetadata].self) { group in
+            func launch() {
+                guard next < albums.count else { return }
+                let al = albums[next]; next += 1
+                group.addTask { [self] in
+                    ((try? await self.tracks(of: al)) ?? []).map { t in
+                        var t = t
+                        if t.parentYear == nil { t.parentYear = al.year }
+                        if t.parentThumb == nil { t.parentThumb = al.thumb }
+                        return t
+                    }
+                }
+            }
+            for _ in 0..<4 { launch() }
+            while let batch = try await group.next() { out += batch; launch() }
+        }
+        return out
     }
 }
 

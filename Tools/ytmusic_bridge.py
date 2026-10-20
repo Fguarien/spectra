@@ -52,6 +52,14 @@ def main():
                 items.append({"id": a["browseId"], "title": a.get("title"), "subtitle": arts(a),
                               "type": "album", "thumb": thumb(a), "year": a.get("year")})
 
+    elif cmd == "library_songs":
+        for t in yt.get_library_songs(limit=5000):
+            if t.get("videoId"):
+                al = t.get("album") or {}
+                items.append({"id": t["videoId"], "title": t.get("title"), "subtitle": arts(t),
+                              "type": "track", "duration": t.get("duration_seconds"), "thumb": thumb(t),
+                              "album": al.get("name"), "albumId": al.get("id")})
+
     elif cmd == "artist_albums":
         d = yt.get_artist(arg)
         for sect in ("albums", "singles"):

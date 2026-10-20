@@ -77,6 +77,14 @@ struct PlexMetadata: Codable {
     /// result from a non-active account be browsed, played and drawn by the
     /// provider it belongs to — cross-provider search and "All Sources".
     var sourceAccountID: String? = nil
+    /// Catalog fields (v2.0, Music-style library): when the row entered the
+    /// library (epoch s), album year / disc / cover, genres. Optional and
+    /// decoded when Plex sends them; other providers fill what they know.
+    var addedAt: Int? = nil
+    var parentYear: Int? = nil
+    var parentIndex: Int? = nil
+    var parentThumb: String? = nil
+    var Genre: [PlexTag]? = nil
 
     /// First playable part key, e.g. "/library/parts/17224/.../file.flac".
     var firstPartKey: String? { Media?.first?.Part.first?.key }
@@ -101,6 +109,8 @@ extension PlexMetadata: Hashable, Identifiable {
         var c = self; c.sourceAccountID = accountID; return c
     }
 }
+
+struct PlexTag: Codable, Hashable { let tag: String }
 
 struct PlexMedia: Codable {
     let audioCodec: String?

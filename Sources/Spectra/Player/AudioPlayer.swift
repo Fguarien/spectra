@@ -39,6 +39,10 @@ final class AudioPlayer: ObservableObject {
     @Published private(set) var duration: Double = 0
     @Published var shuffle = false { didSet { if oldValue != shuffle { reshuffle() } } }
     @Published var repeatMode: RepeatMode = .off
+    /// 0…1, remembered across launches (toolbar slider).
+    @Published var volume: Float = UserDefaults.standard.object(forKey: "player.volume") as? Float ?? 1 {
+        didSet { player.volume = volume; UserDefaults.standard.set(volume, forKey: "player.volume") }
+    }
 
     var current: PlayableTrack? {
         guard let i = currentIndex, queue.indices.contains(i) else { return nil }
@@ -60,6 +64,7 @@ final class AudioPlayer: ObservableObject {
 
     private init() {
         player.actionAtItemEnd = .advance
+        player.volume = volume
         setupRemoteCommands()
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 1, preferredTimescale: 1), queue: .main

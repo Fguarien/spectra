@@ -102,6 +102,13 @@ extension AppDatabase {
         }) ?? 0
     }
 
+    /// ♥ songs, most recent first (the « Favourite Songs » playlist).
+    func likedTracks() -> [PlexMetadata] {
+        (try? dbQueue.read { db in
+            try String.fetchAll(db, sql: "SELECT meta FROM liked ORDER BY likedAt DESC").compactMap(Self.decode)
+        }) ?? []
+    }
+
     func localPlaylistTracks(_ id: Int64) -> [PlexMetadata] {
         (try? dbQueue.read { db in
             try String.fetchAll(db, sql: "SELECT meta FROM localPlaylistItem WHERE playlistID = ? ORDER BY position",

@@ -59,6 +59,13 @@ final class YouTubeMusicProvider: MusicProvider {
         guard let id = Self.strip(album.ratingKey, "ytB:") else { return [] }
         return try await bridgeItems("album_tracks", id).map { $0.asMetadata(albumTitle: album.title) }
     }
+    /// Library songs (most recently added first) — YouTube Music has no
+    /// added date, so the catalog keeps the date a song is first seen.
+    func catalog() async throws -> [PlexMetadata] {
+        guard hasBridge else { return [] }
+        return try await bridgeItems("library_songs").map { $0.asMetadata() }
+    }
+
     func playlists() async throws -> [PlexMetadata] {
         try await bridgeItems("playlists").map { $0.asMetadata() }
     }
@@ -206,6 +213,8 @@ private struct BridgeItem: Decodable {
     let thumb: String?
     let duration: Int?
     let year: String?
+    let album: String?       // library_songs only
+    let albumId: String?
 
     /// Map the normalized item to the app's Plex-shaped interchange model.
     func asMetadata(albumTitle: String? = nil) -> PlexMetadata {
@@ -220,7 +229,8 @@ private struct BridgeItem: Decodable {
             return PlexMetadata(ratingKey: "ytP:\(id)", title: title ?? "Playlist", type: "playlist", thumb: thumb)
         default:  // track
             return PlexMetadata(ratingKey: "yt:\(id)", title: title ?? "Track", type: "track",
-                                thumb: thumb, parentTitle: albumTitle, grandparentTitle: subtitle,
+                                thumb: thumb, parentTitle: albumTitle ?? album, grandparentTitle: subtitle,
+                                parentRatingKey: albumId.map { "ytB:\($0)" },
                                 duration: (duration ?? 0) * 1000)
         }
     }

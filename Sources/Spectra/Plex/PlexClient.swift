@@ -86,6 +86,23 @@ final class PlexClient {
                       as: MediaContainerResponse<PlexMetadata>.self).items
     }
 
+    /// Every row of one type in a section (9 = albums, 10 = tracks), paged so a
+    /// large library never arrives as one multi-megabyte response.
+    func allItems(sectionKey: String, type: Int, pageSize: Int = 2000) async throws -> [PlexMetadata] {
+        var out: [PlexMetadata] = []
+        var start = 0
+        while true {
+            let page = try await get("library/sections/\(sectionKey)/all", query: [
+                .init(name: "type", value: String(type)),
+                .init(name: "X-Plex-Container-Start", value: String(start)),
+                .init(name: "X-Plex-Container-Size", value: String(pageSize)),
+            ], as: MediaContainerResponse<PlexMetadata>.self).items
+            out += page
+            if page.count < pageSize { return out }
+            start += pageSize
+        }
+    }
+
     func children(ratingKey: String) async throws -> [PlexMetadata] {
         try await get("library/metadata/\(ratingKey)/children", as: MediaContainerResponse<PlexMetadata>.self).items
     }

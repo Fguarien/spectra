@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage("notifyOnTrackChange") private var notifyOnTrackChange = true
     @ObservedObject private var lastfm = LastFM.shared
     @ObservedObject private var radio = RadioBuilder.shared
+    @ObservedObject private var catalog = CatalogStore.shared
 
     var body: some View {
         Form {
@@ -85,6 +86,22 @@ struct SettingsView: View {
                 }
                 Button("Import from Prism Items.db…") { pickPrismDB() }
                 Text("Choose the Items.db pulled from Prism’s .imazingapp container. Ratings, play history, tags, similar artists and playlists are migrated.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Library") {
+                ForEach(model.accounts) { acc in
+                    LabeledContent {
+                        if catalog.syncing.contains(acc.id) { ProgressView().controlSize(.small) }
+                        else if let e = catalog.errors[acc.id] { Text(e).foregroundStyle(.red).lineLimit(2) }
+                        else {
+                            Text("\(AppDatabase.shared.catalogCount(acc.id)) songs · "
+                                 + (AppDatabase.shared.catalogSyncedAt(acc.id)?.formatted(date: .abbreviated, time: .shortened) ?? "never"))
+                        }
+                    } label: { Label(acc.name, systemImage: acc.kind.systemImage) }
+                }
+                Button("Refresh Library Now") { model.refreshCatalog(force: true) }
+                Text("Every source is listed into the local database (backed up to the NAS with it) and re-listed when its copy is an hour old.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
