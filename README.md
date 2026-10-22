@@ -21,8 +21,9 @@ through its public HTTP API; nothing is derived from a proprietary client.
 - **Music.app-style pages** — Recently Added, Recently Played, Artists, Albums,
   Songs, Genres. Albums and Artists can be viewed as a grid or as a list. The
   Songs table has sortable, resizable, hideable columns, remembered per page.
-- **Fast search** — instant over the cached library; each online source adds its
-  results as it answers.
+- **Fast search, grouped by source** — instant over the cached library, word by
+  word; each online source adds its results as it answers. The same song found in
+  several sources shows under each one, so you pick the version to play.
 - **Offline-first catalogue** — each source is listed once into a local SQLite
   cache, then refreshed in the background every hour (⌘R to force).
 - **Playlists** — Spectra playlists mix songs from every source (⌘N, rename,

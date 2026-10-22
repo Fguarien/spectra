@@ -87,10 +87,13 @@ final class CatalogStore: ObservableObject {
     @Published private(set) var genres: [CatalogGenre] = []
     @Published private(set) var syncing: Set<String> = []          // account IDs
     @Published private(set) var errors: [String: String] = [:]
-    /// Normalised search text, parallel to `tracks` / `albums` (built once,
-    /// not per keystroke: folding 27 000 titles each time made search lag).
-    private var trackKeys: [String] = []
-    private var albumKeys: [String] = []
+    /// Search words, parallel to `allTracks` / `albums` (built once, not per
+    /// keystroke: folding 27 000 titles each time made search lag).
+    /// `allTracks` keeps EVERY copy of a song — the merged lists keep only the
+    /// best source, and search must let you pick the version to play.
+    private var allTracks: [CatalogTrack] = []
+    private var trackWords: [[String]] = []
+    private var albumWords: [[String]] = []
     /// One library on its own (sidebar « Library » rows), built on demand
     /// from that account's rows only — the merged lists keep one copy per
     /// song, so filtering them would hide what a source also has elsewhere.
@@ -136,7 +139,7 @@ final class CatalogStore: ObservableObject {
 
     private func apply(_ b: Built) {
         tracks = b.tracks; albums = b.albums; artists = b.artists; genres = b.genres
-        trackKeys = b.trackKeys; albumKeys = b.albumKeys
+        allTracks = b.allTracks; trackWords = b.trackWords; albumWords = b.albumWords
         perSource = [:]; version += 1
     }
 
@@ -150,19 +153,39 @@ final class CatalogStore: ObservableObject {
         return b
     }
 
-    /// Library matches for the search page: albums by title or artist, songs
-    /// by title or artist.
-    func search(_ query: String, albumLimit: Int = 20, songLimit: Int = 40) -> ([CatalogAlbum], [CatalogTrack]) {
-        let n = MergedArtist.normalise(query)
-        guard n.count >= 2 else { return ([], []) }
-        var al: [CatalogAlbum] = [], so: [CatalogTrack] = []
-        for (i, k) in albumKeys.enumerated() where k.contains(n) {
+    /// Library matches for the search page: albums, and songs grouped by the
+    /// account that holds them (every copy, so each source shows its version).
+    /// Word-wise and forgiving: « flying to the moon » finds « Fly Me to the Moon ».
+    func search(_ query: String, albumLimit: Int = 20, songLimit: Int = 30)
+        -> (albums: [CatalogAlbum], songs: [String: [CatalogTrack]]) {
+        let q = Self.words(query)
+        guard q.joined().count >= 2 else { return ([], [:]) }
+        var al: [CatalogAlbum] = [], so: [String: [CatalogTrack]] = [:]
+        for (i, w) in albumWords.enumerated() where Self.matches(q, w) {
             al.append(albums[i]); if al.count == albumLimit { break }
         }
-        for (i, k) in trackKeys.enumerated() where k.contains(n) {
-            so.append(tracks[i]); if so.count == songLimit { break }
+        for (i, w) in trackWords.enumerated() where Self.matches(q, w) {
+            let t = allTracks[i]
+            if so[t.accountID, default: []].count < songLimit { so[t.accountID, default: []].append(t) }
         }
         return (al, so)
+    }
+
+    /// Folded, punctuation-free words: "Fly Me To The Moon (2008 Remastered)"
+    /// → ["fly", "me", "to", "the", "moon", "2008", "remastered"].
+    nonisolated static func words(_ s: String) -> [String] {
+        s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+    }
+
+    /// Every query word must meet a word of the candidate: the candidate word
+    /// starts with it (typing in progress), or it starts with the candidate
+    /// word when that one has 3+ letters (« flying » meets « fly »).
+    nonisolated static func matches(_ query: [String], _ candidate: [String]) -> Bool {
+        query.allSatisfy { q in
+            candidate.contains { c in c.hasPrefix(q) || (c.count >= 3 && q.hasPrefix(c)) }
+        }
     }
 
     // MARK: refresh
@@ -217,8 +240,9 @@ final class CatalogStore: ObservableObject {
         var albums: [CatalogAlbum] = []
         var artists: [CatalogArtist] = []
         var genres: [CatalogGenre] = []
-        var trackKeys: [String] = []
-        var albumKeys: [String] = []
+        var allTracks: [CatalogTrack] = []
+        var trackWords: [[String]] = []
+        var albumWords: [[String]] = []
     }
 
     nonisolated static func rank(_ kind: ProviderKind?) -> Int {
@@ -257,8 +281,9 @@ final class CatalogStore: ObservableObject {
         albums.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         b.albums = albums
         b.tracks = albums.flatMap(\.tracks)
-        b.albumKeys = albums.map { MergedArtist.normalise($0.title + " " + $0.artist) }
-        b.trackKeys = b.tracks.map { MergedArtist.normalise($0.title + " " + $0.artist) }
+        b.albumWords = albums.map { words($0.title + " " + $0.artist) }
+        b.allTracks = rows
+        b.trackWords = rows.map { words($0.title + " " + $0.artist) }
 
         var byArtist: [String: [CatalogAlbum]] = [:]
         var artistName: [String: String] = [:]

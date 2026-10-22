@@ -1,9 +1,11 @@
 import SwiftUI
 
 /// Search across EVERY connected account (Plex, Local Files, YouTube Music),
-/// driven by the toolbar field. Results are grouped by provider, then by type.
-/// Track rows play directly; artist and album rows drill down (artist →
-/// albums → tracks, album → tracks), each served by the account it came from.
+/// driven by the toolbar field. Results are grouped by source — the same song
+/// found in Plex and on YouTube Music shows under both, so you pick the version
+/// to play. Each source lists its library matches first (instant, offline-safe,
+/// every copy), then what its own search answered. Track rows play directly;
+/// artist and album rows drill down, served by the account they came from.
 struct SearchView: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var player = AudioPlayer.shared
@@ -16,10 +18,36 @@ struct SearchView: View {
             }
     }
 
+    /// One block per account that has something, in sidebar order.
+    private struct SourceBlock: Identifiable {
+        let account: Account
+        let songs: [CatalogTrack]
+        let hubs: [SearchSection]
+        var id: String { account.id }
+    }
+
+    private var blocks: [SourceBlock] {
+        model.accounts.compactMap { acc in
+            let songs = librarySongs[acc.id] ?? []
+            let shown = Set(songs.map(\.ratingKey))
+            // A track already listed from the library is not repeated from the live search.
+            let hubs: [SearchSection] = model.searchHits.filter { $0.account.id == acc.id }.compactMap { sec in
+                guard sec.type == "track" else { return sec }
+                let rest = sec.items.filter { !shown.contains($0.ratingKey) }
+                return rest.isEmpty ? nil : SearchSection(account: sec.account, title: sec.title,
+                                                          type: sec.type, items: rest)
+            }
+            return songs.isEmpty && hubs.isEmpty ? nil : SourceBlock(account: acc, songs: songs, hubs: hubs)
+        }
+    }
+
     private var content: some View {
-        NavigationStack {
+        let all = blocks
+        let visible = all.filter { sourceFilter == nil || $0.id == sourceFilter }
+        let albums = libraryAlbums.filter { a in sourceFilter.map { a.accountIDs.contains($0) } ?? true }
+        return NavigationStack {
             Group {
-                if model.searchHits.isEmpty && libraryAlbums.isEmpty && librarySongs.isEmpty {
+                if all.isEmpty && libraryAlbums.isEmpty {
                     VStack(spacing: 8) {
                         if model.searching {
                             ProgressView()
@@ -33,42 +61,86 @@ struct SearchView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
-                        if !libraryAlbums.isEmpty || !librarySongs.isEmpty {
-                            Section("In Your Library") {
-                                if !libraryAlbums.isEmpty {
-                                    ScrollView(.horizontal, showsIndicators: false) {
-                                        HStack(alignment: .top, spacing: 16) {
-                                            ForEach(libraryAlbums) { AlbumCell(album: $0).frame(width: 140) }
-                                        }
-                                        .padding(.vertical, 6)
-                                    }
+                        if all.count > 1 {
+                            Picker("Source", selection: $sourceFilter) {
+                                Text("All Sources").tag(String?.none)
+                                ForEach(all) { b in
+                                    Label(b.account.name, systemImage: b.account.kind.systemImage)
+                                        .tag(String?.some(b.id))
                                 }
-                                ForEach(Array(librarySongs.enumerated()), id: \.element.id) { i, t in
-                                    AlbumTrackRow(track: t, number: i + 1, striped: false)
-                                        .onTapGesture(count: 2) { model.play(catalog: librarySongs, startAt: i) }
-                                        .contextMenu { SongsMenu(tracks: [t], context: librarySongs) }
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            .padding(.vertical, 4)
+                        }
+                        if !albums.isEmpty {
+                            Section("Albums in Your Library") {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(alignment: .top, spacing: 16) {
+                                        ForEach(albums) { AlbumCell(album: $0).frame(width: 140) }
+                                    }
+                                    .padding(.vertical, 6)
                                 }
                             }
                         }
-                        ForEach(model.searchHits) { section in
+                        ForEach(visible) { block in
                             Section {
-                                ForEach(section.items) { item in
-                                    hubRow(item, type: section.type)
+                                ForEach(Array(block.songs.enumerated()), id: \.element.id) { i, t in
+                                    songRow(t)
+                                        .onTapGesture { model.play(catalog: block.songs, startAt: i) }
+                                        .contextMenu { SongsMenu(tracks: [t], context: block.songs) }
+                                }
+                                ForEach(block.hubs) { section in
+                                    if block.songs.isEmpty && block.hubs.count == 1 && section.type == "track" {
+                                        EmptyView()
+                                    } else {
+                                        Text(section.title).font(.caption).foregroundStyle(.secondary)
+                                            .padding(.top, 4)
+                                    }
+                                    ForEach(section.items) { item in
+                                        hubRow(item, type: section.type)
+                                    }
                                 }
                             } header: {
-                                Label("\(section.account.name) — \(section.title)",
-                                      systemImage: section.account.kind.systemImage)
+                                HStack {
+                                    Label(block.account.name, systemImage: block.account.kind.systemImage)
+                                    if model.searching && !model.searchHits.contains(where: { $0.account.id == block.id }) {
+                                        ProgressView().controlSize(.small)
+                                    }
+                                }
                             }
+                        }
+                        if model.searching {
+                            HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }
                         }
                     }
                 }
             }
         }
+        // A source picked for one query means nothing for the next.
+        .onChange(of: model.searchQuery) { _, _ in sourceFilter = nil }
     }
 
-    // Matches in the merged library, shown first (instant, offline-safe).
+    // Matches in the library: albums (merged) and songs per account (every copy).
     @State private var libraryAlbums: [CatalogAlbum] = []
-    @State private var librarySongs: [CatalogTrack] = []
+    @State private var librarySongs: [String: [CatalogTrack]] = [:]
+    @State private var sourceFilter: String?
+
+    private func songRow(_ t: CatalogTrack) -> some View {
+        let playing = player.current?.id == t.ratingKey
+        return HStack {
+            if playing { Image(systemName: "speaker.wave.2.fill").foregroundStyle(.tint) }
+            Text(t.title).lineLimit(1)
+            Text("— \(t.artist)\(t.album.isEmpty ? "" : " · \(t.album)")")
+                .foregroundStyle(.secondary).font(.caption).lineLimit(1)
+            Spacer()
+            OfflineBadge(ratingKey: t.ratingKey)
+            if model.isLiked(t.meta) { Image(systemName: "heart.fill").font(.caption).foregroundStyle(.pink) }
+            Text(formatDuration(ms: t.durationMs)).foregroundStyle(.secondary).font(.callout).monospacedDigit()
+        }
+        .selectedRow(playing)
+        .contentShape(Rectangle())
+    }
 
     @ViewBuilder private func hubRow(_ item: PlexMetadata, type: String) -> some View {
         if type == "track" {

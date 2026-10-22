@@ -19,7 +19,7 @@ struct HelpView: View {
                       "Recently Added, Recently Played, Artists, Albums, Songs and Genres, like Music. Albums and Artists can be viewed as a grid or as a list (toolbar buttons). The Songs list has sortable, resizable columns — right-click the header to show or hide them; Spectra remembers the layout.")
 
                 topic("Search",
-                      "Type in the field at the top of the sidebar. Matches from your library appear at once; each online source adds its results as it answers. Clear the field to get back to the page you were on.")
+                      "Type in the field at the top of the sidebar. Results are grouped by source: the same song found in Plex, a local folder and YouTube Music shows under each one, so you choose the version to play; the picker at the top keeps a single source. Library matches appear at once, word by word (« flying to the moon » finds « Fly Me to the Moon »); each online source adds its results as it answers. Clear the field to get back to the page you were on.")
 
                 topic("Playlists",
                       "File → New Playlist… (⌘N) creates a Spectra playlist, which may mix songs from every source. Add songs from any context menu → Add to Playlist. Rename a playlist from its right-click menu or by double-clicking its title. Plex and YouTube Music playlists are listed below yours.")
