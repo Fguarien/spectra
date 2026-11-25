@@ -13,6 +13,16 @@ let package = Package(
             dependencies: [.product(name: "GRDB", package: "GRDB.swift")],
             path: "Sources/Spectra",
             swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
+            name: "SpectraTests",
+            dependencies: ["Spectra"],
+            path: "Tests/SpectraTests"
+        ),
+        .testTarget(
+            name: "SpectraUITests",
+            dependencies: ["Spectra"],
+            path: "Tests/SpectraUITests"
         )
     ]
 )
